@@ -21,13 +21,17 @@ only adds its own button and panel.
 
 ## What it writes
 
-- The CSV files, saved to your computer through the browser's downloads, in the
-  folder you choose each time in Chrome's *Save as* window. A file too large for the
-  browser's download interface is saved by the page into the download directory itself.
+- The CSV files, saved to your computer through the browser's downloads: the first in
+  the folder you choose in Chrome's *Save as* window, the other next to it. To put it
+  there, the extension may first save it in the browser's download folder, to learn
+  where that folder is, and then remove it from there. A file too large for the
+  browser's download interface is saved by the page into the download folder itself.
 - In the extension's local storage (`chrome.storage.local`): whether you accepted the
   risk notice, the date of each account's last export, the start of the file names,
   the values of the export form for the current day (period,
-  accounts, details option), the result of the last update check and, for at most three
+  accounts, details option), the result of the last update check, the location of the
+  browser's download folder (a path on your computer, which can contain your user name)
+  and when it was last checked, and, for at most three
   people, the ids of the portfolio and of the overnight accounts seen on the pages, so
   that an export works from any page after a browser restart. These are filed under a
   SHA-256 fingerprint of the person id, never under the person id itself.
@@ -48,8 +52,8 @@ To give its own files their names, the extension takes part in naming downloads
 leaves every other download untouched and keeps nothing about them.
 
 The diagnostics printed in the browser console stay on your computer and contain no
-identifiers, amounts or descriptions: only operation names, request paths (with any
-identifier-like part hidden), statuses, counts and signs.
+identifiers, amounts, descriptions or folders: only operation names, request paths (with
+any identifier-like part hidden), statuses, counts and signs.
 
 ## What it sends
 

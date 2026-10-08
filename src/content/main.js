@@ -9,7 +9,7 @@
   if (!LFX || LFX.started) return;
   LFX.started = true;
 
-  const INFO_URL = 'https://github.com/Librefolio/librefolio-exporter#risks';
+  const INFO_URL = 'https://github.com/Librefolio/librefolio-exporter/blob/main/docs/RISKS.md';
   const APP_PATH = /^\/(broker|interest|cockpit|savings|account)(\/|$)/;
   const TRANSACTIONS_PAGE = /^\/interest\/overnight\/([^/]+)\/transactions\/?$/;
   const EXPORTER_ID = 'librefolio-exporter';
@@ -25,6 +25,8 @@
   const ACCOUNTS = ['broker', 'deposit'];
   // Progress steps that report (done, total): the bar can show how far they are.
   const COUNTED_STEPS = new Set(['progressDeposit', 'progressBrokerDetails', 'progressDepositDetails']);
+  const SAVE_POLL_MS = 500;
+  const SAVE_WAIT_MS = 15 * 60 * 1000;
   const ERROR_KEYS = {
     noPerson: 'errorNoPerson',
     noPortfolio: 'errorNoPortfolio',
@@ -200,25 +202,68 @@
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
 
-  // Through the extension (chosen folder, or Chrome's window); from the page, into
-  // Downloads, when a file is too large for that or the extension does not answer.
-  // Through the extension, with Chrome's window to choose the folder; from the page, into
-  // Downloads, when a file is too large for that or the extension does not answer.
-  async function saveFiles(files, settings) {
-    if (files.every((file) => LFX.files.fitsDataUrl(file.content))) {
-      const answer = await message({ type: 'lfx:download', files, folder: '', saveAs: settings.saveDialog !== false });
-      if (answer && answer.ok) return { ok: true, via: 'downloads' };
-      if (answer && answer.error) return { ok: false, error: answer.error };
-      log('download-fallback', { reason: 'no answer from the extension' });
-    } else {
-      log('download-fallback', { reason: 'file too large for the extension' });
-    }
+  // From the page, into Downloads: for a file too large for the extension, or when the
+  // extension does not answer.
+  function saveFromPage(files) {
     for (const file of files) anchorDownload(file.name, file.content);
-    return { ok: true, via: 'anchor' };
   }
 
-  function savedText(saved, settings) {
-    return saved.via === 'downloads' && settings.saveDialog !== false ? t('savedAsked') : t('savedIn', t('downloadsName'));
+  // Polls the background while Chrome's "Save as" window is open: each question keeps the
+  // background awake, which a single long wait would not.
+  async function waitForChoice(id) {
+    const end = Date.now() + SAVE_WAIT_MS;
+    while (Date.now() < end) {
+      const answer = await message({ type: 'lfx:download-state', id });
+      if (!answer) return { state: 'failed', error: 'no answer from the extension' };
+      if (answer.state !== 'pending') return answer;
+      await new Promise((resolve) => setTimeout(resolve, SAVE_POLL_MS));
+    }
+    return { state: 'failed', error: 'timeout' };
+  }
+
+  // Chrome's "Save as" window for the first file, the others next to it. From the page,
+  // into Downloads, when a file is too large for the extension or it does not answer.
+  // saved: { account, folder } for each file written; ok false with the reason otherwise.
+  async function saveFiles(files, settings) {
+    const inDownloads = () => ({ ok: true, saved: files.map((file) => ({ account: file.account, folder: t('downloadsName') })) });
+    const fromPage = (reason) => {
+      log('download-fallback', { reason });
+      saveFromPage(files);
+      return inDownloads();
+    };
+    if (!files.every((file) => LFX.files.fitsDataUrl(file.content))) return fromPage('file too large for the extension');
+    const plain = files.map((file) => ({ name: file.name, content: file.content }));
+    if (settings.saveDialog === false) {
+      const answer = await message({ type: 'lfx:download', files: plain, folder: '', saveAs: false });
+      if (answer && answer.ok) return inDownloads();
+      if (answer && answer.error) return { ok: false, error: answer.error, saved: [] };
+      return fromPage('no answer from the extension');
+    }
+    const first = await message({ type: 'lfx:save-first', file: plain[0] });
+    if (!first) return fromPage('no answer from the extension');
+    if (!first.ok) return { ok: false, error: first.error, saved: [] };
+    const chosen = await waitForChoice(first.id);
+    log('save-first', { state: chosen.state });
+    if (chosen.state === 'cancelled') return { ok: false, cancelled: true, saved: [] };
+    if (chosen.state !== 'chosen') return { ok: false, error: chosen.error || chosen.state, saved: [] };
+    const saved = [{ account: files[0].account, folder: chosen.directory }];
+    if (files.length === 1) return { ok: true, saved };
+    const next = await message({ type: 'lfx:save-next', files: plain.slice(1), directory: chosen.directory });
+    if (!next || !next.ok) return { ok: false, error: (next && next.error) || 'no answer from the extension', saved };
+    for (const [index, result] of next.files.entries()) {
+      const account = files[index + 1].account;
+      if (result.directory) {
+        log('save-next', { account, how: 'next to the first file' });
+        saved.push({ account, folder: result.directory });
+        continue;
+      }
+      // Chrome opens a window for this file too: outside its download folder, or by its setting.
+      const choice = await waitForChoice(result.window);
+      log('save-next', { account, how: 'window', state: choice.state });
+      if (choice.state === 'chosen') saved.push({ account, folder: choice.directory });
+      else if (choice.state !== 'cancelled') return { ok: false, error: choice.error || choice.state, saved };
+    }
+    return { ok: true, saved };
   }
 
   // force: ask GitHub now; otherwise the background answers from its daily cache.
@@ -281,6 +326,7 @@
     ui.setBusy(true);
     ui.setWarnings([]);
     ui.setStatus('');
+    ui.setResult(null);
     // One collapsed group per export keeps the page's console readable.
     console.groupCollapsed(`[LibreFolio Exporter] ${t('exporting')} ${new Date().toLocaleTimeString()}`);
     try {
@@ -309,8 +355,9 @@
         options,
         context: { exporter: `${EXPORTER_ID}/${version}` },
         progress: (key, ...args) => {
-          log(t(key, ...args));
-          ui.setProgress(COUNTED_STEPS.has(key) && args[1] > 0 ? args[0] / args[1] : null);
+          const label = t(key, ...args);
+          log(label);
+          ui.setProgress(COUNTED_STEPS.has(key) && args[1] > 0 ? args[0] / args[1] : null, label);
         },
         diagnostics: log,
       });
@@ -323,8 +370,10 @@
 
       const names = LFX.files.fileNames(settings.filePrefix, LFX.format.fileTimestamp());
       const files = [];
-      if (outcome.broker && outcome.broker.length > 0) files.push({ name: names.broker, content: scalable.exporter.toCsv(outcome.broker) });
-      if (outcome.deposit && outcome.deposit.length > 0) files.push({ name: names.deposit, content: scalable.exporter.toCsv(outcome.deposit) });
+      for (const account of ACCOUNTS) {
+        const rows = outcome[account];
+        if (rows && rows.length > 0) files.push({ account, name: names[account], content: scalable.exporter.toCsv(rows), count: rows.length });
+      }
 
       const messages = outcome.warnings.map((warning) => t(warning.key, ...(warning.args || [])));
       for (const failure of outcome.errors) {
@@ -338,23 +387,36 @@
         ui.setStatus(errorText(outcome.errors[0].error), 'error');
         return;
       }
+      const written = new Set();
       if (files.length > 0) {
-        const saved = await saveFiles(files, settings);
-        if (!saved.ok) {
-          log('save-error', { error: saved.error });
-          ui.setStatus(t('saveFailed', saved.error), 'error');
-          return;
+        if (settings.saveDialog !== false) ui.setProgress(null, t(files.length > 1 ? 'progressSaving' : 'progressSavingOne'));
+        const result = await saveFiles(files, settings);
+        for (const entry of result.saved) written.add(entry.account);
+        const folders = new Set(result.saved.map((entry) => entry.folder));
+        ui.setResult(
+          files
+            .filter((file) => written.has(file.account))
+            .map((file) => ({ account: file.account, name: file.name, text: t(file.account === 'broker' ? 'resultBroker' : 'resultDeposit', file.count) })),
+          folders.size === 1 && result.saved[0].folder ? t('resultFolder', result.saved[0].folder) : '',
+        );
+        if (result.cancelled) ui.setStatus(t('saveCancelled'));
+        else if (!result.ok) {
+          log('save-error', { error: result.error });
+          ui.setStatus(t('saveFailed', result.error), 'error');
         }
-        ui.setStatus(`${t('done', (outcome.broker || []).length, (outcome.deposit || []).length)} ${savedText(saved, settings)}`, 'success');
       } else {
         ui.setStatus(t('nothingToExport'));
       }
-      // Each account read without errors is up to date until "to".
+      // An account read without errors is up to date until "to" once its file is saved, or
+      // when it had nothing to export.
       const exportedUntil = options.to || LFX.format.todayBerlin();
       const dates = Object.assign({}, settings.lastExportDates);
-      for (const account of ACCOUNTS) if (Array.isArray(outcome[account])) dates[account] = exportedUntil;
-      await saveSettings({ lastExportDates: dates });
-      ui.setLastExport(dates);
+      const updated = ACCOUNTS.filter((account) => Array.isArray(outcome[account]) && (outcome[account].length === 0 || written.has(account)));
+      for (const account of updated) dates[account] = exportedUntil;
+      if (updated.length > 0) {
+        await saveSettings({ lastExportDates: dates });
+        ui.setLastExport(dates);
+      }
     } catch (error) {
       const cancelled = error && error.code === 'cancelled';
       if (cancelled) log('cancelled');

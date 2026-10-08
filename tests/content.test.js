@@ -232,7 +232,29 @@ function createBackground(options) {
   );
   // ignoreNames: like another extension that names downloads, the name given to
   // chrome.downloads.download is replaced; the extension's own listener is asked last.
-  const background = { downloads: [], session: {}, listeners: [], nameListeners: [], ignoreNames: false, releaseRequests: 0, local: {}, clock: Date.now() };
+  // root: Chrome's download folder. A file with a window (saveAs, or any file when
+  // askEveryFile, Chrome's "ask where to save each file") stays unnamed for windowPolls
+  // looks, then is saved in dialogDirectory; it is cancelled when dialogCancels is true, or
+  // is the number of the first window the user closes. Paths matching refuseNames are refused.
+  const background = {
+    downloads: [],
+    session: {},
+    listeners: [],
+    nameListeners: [],
+    ignoreNames: false,
+    releaseRequests: 0,
+    local: {},
+    clock: Date.now(),
+    root: '/Users/test/Downloads',
+    dialogDirectory: '/Users/test/Downloads/Reports',
+    dialogCancels: false,
+    askEveryFile: false,
+    windowPolls: 0,
+    refuseNames: null,
+    dialogs: 0,
+    items: new Map(),
+    removed: [],
+  };
   class FakeDate extends Date {}
   FakeDate.now = () => background.clock;
   const chrome = {
@@ -245,6 +267,9 @@ function createBackground(options) {
       local: {
         get: async (defaults) => Object.assign({}, defaults, background.local),
         set: async (values) => Object.assign(background.local, values),
+        remove: async (keys) => {
+          for (const key of [].concat(keys)) delete background.local[key];
+        },
       },
       session: {
         get: async (key) => (key in background.session ? { [key]: background.session[key] } : {}),
@@ -254,6 +279,7 @@ function createBackground(options) {
     downloads: {
       onDeterminingFilename: { addListener: (listener) => background.nameListeners.push(listener) },
       download: async (options) => {
+        if (background.refuseNames && background.refuseNames.test(options.filename)) throw new Error('Invalid filename');
         const item = { id: background.downloads.length + 1, url: options.url, filename: background.ignoreNames ? 'download.csv' : options.filename, byExtensionId: EXTENSION_ID };
         let finalName = item.filename;
         for (const listener of background.nameListeners) {
@@ -261,8 +287,41 @@ function createBackground(options) {
             if (suggestion && suggestion.filename) finalName = suggestion.filename;
           });
         }
-        background.downloads.push(Object.assign({}, options, { finalName }));
-        return background.downloads.length;
+        const window = options.saveAs === true || background.askEveryFile;
+        const entry = { id: item.id, filename: `${background.root}/${finalName}`, state: 'complete', pending: 0, byExtensionId: EXTENSION_ID };
+        if (window) {
+          background.dialogs++;
+          entry.pending = background.windowPolls;
+          const cancels = background.dialogCancels === true || (typeof background.dialogCancels === 'number' && background.dialogs >= background.dialogCancels);
+          if (cancels) Object.assign(entry, { filename: '', state: 'interrupted', error: 'USER_CANCELED' });
+          else entry.filename = `${background.dialogDirectory}/${finalName.split('/').pop()}`;
+        }
+        background.items.set(item.id, entry);
+        background.downloads.push(Object.assign({}, options, { id: item.id, finalName, entry }));
+        return item.id;
+      },
+      search: async (query) => {
+        const entry = background.items.get(query.id);
+        if (!entry) return [];
+        if (entry.pending > 0) {
+          entry.pending--;
+          return [{ id: entry.id, filename: '', state: 'in_progress', byExtensionId: EXTENSION_ID }];
+        }
+        return [{ id: entry.id, filename: entry.filename, state: entry.state, error: entry.error, byExtensionId: EXTENSION_ID }];
+      },
+      removeFile: async (id) => {
+        const entry = background.items.get(id);
+        if (!entry || entry.state !== 'complete' || entry.pending > 0) throw new Error('Download must be complete');
+        entry.removed = true;
+        background.removed.push(entry.filename);
+      },
+      cancel: async (id) => {
+        const entry = background.items.get(id);
+        if (entry && entry.state !== 'complete') Object.assign(entry, { state: 'interrupted', error: 'USER_CANCELED' });
+      },
+      erase: async (query) => {
+        background.items.delete(query.id);
+        return [query.id];
       },
     },
   };
@@ -272,7 +331,16 @@ function createBackground(options) {
     TextEncoder,
     btoa,
     crypto: globalThis.crypto,
-    setTimeout: () => 0,
+    // Short waits pass at once on the background's clock; long timers never fire.
+    setTimeout: (callback, ms) => {
+      if (ms <= 1000) {
+        setImmediate(() => {
+          background.clock += ms;
+          callback();
+        });
+      }
+      return 0;
+    },
     Date: FakeDate,
     fetch: async (url) => {
       background.releaseRequests++;
@@ -281,6 +349,7 @@ function createBackground(options) {
     },
   });
   context.self = context;
+  background.context = context;
   context.importScripts = (...files) => {
     for (const file of files) vm.runInContext(fs.readFileSync(path.join(ROOT, 'src', file), 'utf8'), context, { filename: file });
   };
@@ -292,8 +361,11 @@ function createBackground(options) {
       const waiting = background.listeners[0](message, sender || { id: EXTENSION_ID }, resolve);
       if (!waiting) resolve(undefined);
     });
+  // The files saved and still there, with the name each was given.
+  const kept = () => background.downloads.filter((options) => options.entry.state === 'complete' && !options.entry.removed);
+  background.saved = () => kept().map((options) => options.entry.filename);
   background.files = () =>
-    background.downloads.map((options) => ({
+    kept().map((options) => ({
       filename: options.finalName,
       saveAs: options.saveAs,
       conflictAction: options.conflictAction,
@@ -431,6 +503,14 @@ function loadContentScripts(page) {
   return page;
 }
 
+function textOf(node) {
+  return node.children.length > 0 ? node.children.map(textOf).join('') : node.textContent;
+}
+
+function resultLines(page) {
+  return page.find('lfx-result').children.map(textOf);
+}
+
 // Values built inside another context have that context's prototypes.
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -512,8 +592,12 @@ test('the content scripts export both accounts end to end', async () => {
   assert.equal(find('lfx-to').value, format.todayBerlin(), '"to" is today');
 
   await acceptRiskAndExport(page);
-  assert.equal(find('lfx-status').className, 'status success');
-  assert.equal(find('lfx-status').textContent, 'Fatto: 2 transazioni del broker, 2 del conto deposito. Scegli dove salvarli nella finestra di Chrome.');
+  assert.equal(find('lfx-status').textContent, '');
+  assert.deepEqual(resultLines(page), [
+    `✅ ${page.background.files()[0].filename} — 2 transazioni del conto broker`,
+    `✅ ${page.background.files()[1].filename.split('/').pop()} — 2 movimenti del conto deposito`,
+  ]);
+  assert.equal(find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Downloads/Reports');
   assert.equal(find('lfx-progress').hidden, true, 'the progress bar is shown only while exporting');
   assert.equal(find('lfx-warnings').hidden, true, warningTexts(page).join(' | '));
 
@@ -529,9 +613,20 @@ test('the content scripts export both accounts end to end', async () => {
   const files = page.background.files();
   assert.equal(files.length, 2);
   assert.match(files[0].filename, /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
-  assert.match(files[1].filename, /^scalable-deposit_.*\.csv$/);
+  assert.match(files[1].filename, /^Reports\/scalable-deposit_.*\.csv$/, 'the second file goes next to the first, inside the download folder');
+  assert.equal(page.background.dialogs, 1, 'one "Save as" window for both files');
+  assert.deepEqual(
+    plain(page.background.saved()).map((saved) => saved.slice(0, saved.lastIndexOf('/'))),
+    ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports'],
+  );
+  assert.deepEqual(
+    plain(page.background.removed),
+    [`/Users/test/Downloads/${files[1].filename.split('/').pop()}`],
+    'the first time, the second file lands in Chrome’s download folder, which shows where that is, and is moved',
+  );
+  assert.equal(page.background.local.downloadRoot, '/Users/test/Downloads');
   assert.equal(files[0].filename.slice(-23), files[1].filename.slice(-23), 'both files share the time stamp');
-  assert.ok(files.every((file) => file.saveAs === true && file.conflictAction === 'uniquify'), 'Chrome’s window chooses the folder');
+  assert.deepEqual(files.map((file) => [file.saveAs, file.conflictAction]), [[true, 'uniquify'], [false, 'uniquify']]);
 
   const lines = files[0].text.trimEnd().split('\n');
   assert.equal(lines.length, 3);
@@ -581,7 +676,7 @@ test('on the Transactions page the recipe is read from the page, and remembered 
 
   await openPanel(transactionsPage);
   await acceptRiskAndExport(transactionsPage);
-  assert.equal(transactionsPage.find('lfx-status').className, 'status success', transactionsPage.find('lfx-status').textContent);
+  assert.equal(transactionsPage.find('lfx-result').hidden, false, transactionsPage.find('lfx-status').textContent);
   assert.deepEqual(callNames(transactionsPage), [...BROKER_CALLS, ...DEPOSIT_CALLS], 'no page download');
   assert.deepEqual(logged(transactionsPage, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'remembered', overnight: 'page', overnightAccounts: 1, overnightRecipes: ['page'] }]);
   assertNoSecrets(transactionsPage);
@@ -590,7 +685,7 @@ test('on the Transactions page the recipe is read from the page, and remembered 
   await openPanel(home);
   home.find('lfx-preset-all').click();
   await acceptRiskAndExport(home);
-  assert.equal(home.find('lfx-status').className, 'status success');
+  assert.equal(home.find('lfx-result').hidden, false);
   assert.deepEqual(callNames(home), [...BROKER_CALLS, ...DEPOSIT_CALLS]);
   assert.deepEqual(logged(home, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'remembered', overnight: 'remembered', overnightAccounts: 1, overnightRecipes: ['memory'] }]);
 });
@@ -618,7 +713,7 @@ test('a security check on the Transactions page asks the user to open it', async
   const page = loadContentScripts(createPage({ server: { depositPage: () => ({ status: 0, ok: false, type: 'opaqueredirect' }) } }));
   await openPanel(page);
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-status').className, 'status success', 'the broker is still saved');
+  assert.equal(resultLines(page).length, 1, 'the broker is still saved');
   assert.deepEqual(warningTexts(page), [
     'Conto deposito: Apri su Scalable la pagina «Transazioni» del conto deposito, poi esporta da lì.',
     'Dettagli tecnici: depositPage: redirect',
@@ -709,14 +804,10 @@ test('the prefix is the only saving setting: Chrome’s window chooses the folde
   await openPanel(page);
   const find = page.find;
   assert.equal(find('lfx-prefix').value, 'scalable');
-  assert.equal(find('lfx-save-target').textContent, 'Scegli la cartella a ogni esportazione, nella finestra di Chrome');
+  assert.equal(find('lfx-prefix').hidden, false, 'shown at once, without an edit button');
+  assert.equal(find('lfx-save-edit'), null);
   assert.equal(find('lfx-folder'), null, 'no folder setting');
   assert.equal(find('lfx-ask-where'), null, 'no "ask where" setting');
-  assert.equal(find('lfx-save-editor').hidden, true);
-  find('lfx-save-edit').click();
-  assert.equal(find('lfx-save-editor').hidden, false);
-  assert.equal(find('lfx-save-edit').textContent, 'Fatto');
-  assert.equal(find('lfx-save-edit').getAttribute('aria-expanded'), 'true');
   assert.match(find('lfx-file-name-broker').textContent, /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
   assert.match(find('lfx-file-name-deposit').textContent, /^scalable-deposit_\S+\.csv$/);
 
@@ -729,32 +820,152 @@ test('the prefix is the only saving setting: Chrome’s window chooses the folde
   await acceptRiskAndExport(page);
   const files = page.background.files();
   assert.match(files[0].filename, /^contomio-broker_/);
-  assert.match(files[1].filename, /^contomio-deposit_/);
-  assert.ok(files.every((file) => file.saveAs === true), 'Chrome asks where to save each file');
-  assert.match(page.find('lfx-status').textContent, /Scegli dove salvarli nella finestra di Chrome\.$/);
-  find('lfx-save-edit').click();
-  assert.equal(find('lfx-save-editor').hidden, true);
-  assert.equal(find('lfx-save-edit').textContent, 'Modifica');
+  assert.match(files[1].filename, /^Reports\/contomio-deposit_/);
+  assert.equal(page.background.dialogs, 1);
+});
+
+// The broker file is saved first, with Chrome's window; the deposit file follows.
+function savedFolders(background) {
+  return plain(background.saved()).map((saved) => saved.slice(0, saved.lastIndexOf('/')));
+}
+
+test('the second file goes next to the first without a window, whenever Chrome allows it', async () => {
+  const page = loadContentScripts(createPage());
+  await openPanel(page);
+  const background = page.background;
+  await acceptRiskAndExport(page);
+  assert.equal(background.removed.length, 1, 'the first export learns Chrome’s download folder');
+
+  await acceptRiskAndExport(page);
+  assert.equal(background.removed.length, 1, 'then the second file goes straight next to the first');
+  assert.equal(background.dialogs, 2, 'one window per export');
+  assert.deepEqual(savedFolders(background).slice(2), ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports']);
+
+  background.dialogDirectory = '/Users/test/Downloads';
+  await acceptRiskAndExport(page);
+  assert.deepEqual(savedFolders(background).slice(4), ['/Users/test/Downloads', '/Users/test/Downloads'], 'the download folder itself');
+  assert.equal(background.dialogs, 3);
+
+  background.dialogDirectory = '/Users/test/Documents/Finanza';
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 5, 'outside the download folder, Chrome needs a window for each file');
+  assert.equal(background.removed.length, 1, 'and nothing is written in the download folder first');
+  assert.deepEqual(resultLines(page).length, 2);
+  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents/Finanza', 'both chosen in the same folder');
+
+  background.dialogDirectory = '/Users/test/Downloads/.private';
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 7, 'a folder name that would not reach Chrome unchanged: a window');
+
+  background.dialogDirectory = '/Users/test/Downloads/Reports';
+  background.refuseNames = /^Reports\//;
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 9, 'a path Chrome refuses: a window');
+  assert.equal(background.removed.length, 1);
+  assert.deepEqual(logged(page, 'save-next').slice(-1), [{ account: 'deposit', how: 'window', state: 'chosen' }]);
+  assert.ok(!JSON.stringify(page.logs).includes('/Users/test'), 'folders are never logged');
+});
+
+test('with Chrome set to ask where to save each file, each file has its window and none is moved', async () => {
+  const page = loadContentScripts(createPage());
+  await openPanel(page);
+  const background = page.background;
+  background.askEveryFile = true;
+  background.windowPolls = 40;
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 2);
+  assert.deepEqual(background.removed, [], 'a file saved through a window is never moved');
+  assert.deepEqual(savedFolders(background), ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports']);
+  assert.equal(resultLines(page).length, 2);
+  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Downloads/Reports');
+  assert.equal(background.local.downloadRoot, undefined, 'nothing learnt from a window');
+});
+
+test('closing a window saves nothing more, and only saved accounts count as exported', async () => {
+  const page = loadContentScripts(createPage());
+  await openPanel(page);
+  const background = page.background;
+  background.dialogCancels = true;
+  await acceptRiskAndExport(page);
+  assert.equal(page.find('lfx-status').textContent, 'Salvataggio annullato: nessun file scritto.');
+  assert.equal(page.find('lfx-result').hidden, true);
+  assert.deepEqual(background.saved(), []);
+  assert.equal(page.stored.lastExportDates, undefined);
+
+  background.dialogCancels = 3;
+  background.dialogDirectory = '/Users/test/Documents';
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 3, 'the deposit file had its own window, closed by the user');
+  assert.equal(page.find('lfx-status').textContent, '');
+  assert.deepEqual(resultLines(page).map((line) => line.split(' — ')[1]), ['2 transazioni del conto broker']);
+  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents');
+  assert.deepEqual(Object.keys(page.stored.lastExportDates), ['broker'], 'the deposit is not exported yet');
+});
+
+test('a changed download folder is learnt again from where the file lands', async () => {
+  const page = loadContentScripts(createPage());
+  await openPanel(page);
+  const background = page.background;
+  const week = 7 * 24 * 60 * 60 * 1000;
+  Object.assign(background.local, { downloadRoot: '/Users/test/Old', downloadRootCheckedAt: background.clock });
+  background.dialogDirectory = '/Users/test/Old/Reports';
+  await acceptRiskAndExport(page);
+  assert.equal(background.local.downloadRoot, '/Users/test/Downloads', 'the file landed in the new download folder');
+  assert.equal(background.removed.length, 1, 'and was taken away from there');
+  assert.equal(background.dialogs, 2, 'the chosen folder is outside the new download folder: a window');
+
+  background.dialogDirectory = '/Users/test/Downloads/Reports';
+  Object.assign(background.local, { downloadRoot: '/Users/test/Old', downloadRootCheckedAt: background.clock });
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 4, 'outside the known folder, checked recently: a window at once');
+  assert.equal(background.removed.length, 1);
+
+  background.local.downloadRootCheckedAt = background.clock - week;
+  await acceptRiskAndExport(page);
+  assert.equal(background.dialogs, 5, 'checked again after a week: one window');
+  assert.equal(background.local.downloadRoot, '/Users/test/Downloads');
+  assert.deepEqual(savedFolders(background).slice(-2), ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports']);
+});
+
+test('paths below the download folder are compared as Chrome reports them', () => {
+  const { relativeFolder, rootFrom, sameDirectory } = createBackground().context;
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/'), '');
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/LibreFolio/2026'), 'LibreFolio/2026');
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads2/x'), null);
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Documents'), null);
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/a/b/c/d/e/f'), null, 'deeper than Chrome’s paths here');
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/Esportazioni  2026'), null, 'a name that would change');
+  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/Spese e\u0301'), 'Spese \u00e9');
+  assert.equal(relativeFolder('C:\\Users\\T\\Downloads', 'c:\\users\\t\\downloads\\Export'), 'Export');
+  assert.equal(relativeFolder('', '/Users/t/Downloads'), null);
+  assert.equal(rootFrom('/Users/t/Downloads/LibreFolio/2026', 'LibreFolio/2026'), '/Users/t/Downloads');
+  assert.equal(rootFrom('/Users/t/Downloads', ''), '/Users/t/Downloads');
+  assert.equal(rootFrom('/Users/t/Other', 'LibreFolio'), '');
+  assert.equal(rootFrom('C:\\D\\Export', 'export'), 'C:\\D');
+  assert.equal(sameDirectory('/Users/t/Spese e\u0301', '/Users/t/Spese \u00e9/'), true);
+  assert.equal(sameDirectory('/Users/t/a', '/Users/t/A'), false);
+  assert.equal(sameDirectory('C:\\Users\\T', 'c:\\users\\t'), true);
 });
 
 test('a save failure is reported, and without the extension the page saves the files', async () => {
   const page = loadContentScripts(createPage());
   await openPanel(page);
-  page.override = (message) => (message.type === 'lfx:download' ? { ok: false, error: 'disk full' } : undefined);
+  page.override = (message) => (message.type === 'lfx:save-first' ? { ok: false, error: 'disk full' } : undefined);
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-status').className, 'status error');
+  assert.equal(page.find('lfx-result').hidden, true);
   assert.equal(page.find('lfx-status').textContent, 'Salvataggio dei file non riuscito: disk full');
   assert.equal(page.stored.lastExportDates, undefined, 'a failed save is not a done export');
 
   page.override = (message) => {
-    if (message.type === 'lfx:download') throw new Error('Extension context invalidated.');
+    if (message.type === 'lfx:save-first') throw new Error('Extension context invalidated.');
     return undefined;
   };
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-status').className, 'status success');
+  assert.equal(page.find('lfx-result').hidden, false);
+  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: Download');
   assert.equal(page.anchorDownloads.length, 2);
   assert.match(page.anchorDownloads[0].name, /^scalable-broker_/);
-  assert.match(page.find('lfx-status').textContent, /Salvati in Download\.$/);
   assert.match(await page.blobs.get(page.anchorDownloads[1].url).text(), /^date;time;status;/);
   assert.deepEqual(logged(page, 'download-fallback'), [{ reason: 'no answer from the extension' }]);
 });
@@ -896,11 +1107,11 @@ test('files keep their names when another extension renames downloads', async ()
   const page = loadContentScripts(createPage({ background }));
   await openPanel(page);
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-status').className, 'status success');
+  assert.equal(page.find('lfx-result').hidden, false);
   const names = background.files().map((file) => file.filename);
   assert.equal(names.length, 2);
   assert.match(names[0], /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
-  assert.match(names[1], /^scalable-deposit_/);
+  assert.match(names[1], /^Reports\/scalable-deposit_/);
 
   const listener = background.nameListeners[0];
   let suggested = 'not asked';
@@ -928,7 +1139,7 @@ test('accounts seen on the pages survive an extension reload, per person, withou
   const page = loadContentScripts(createPage({ background, links: [] }));
   await openPanel(page);
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-status').className, 'status success', page.find('lfx-status').textContent);
+  assert.equal(page.find('lfx-result').hidden, false, page.find('lfx-status').textContent);
   assert.deepEqual(logged(page, 'identifiers')[0].overnight, 'remembered', 'from the broker page, after a reload');
   assert.ok(page.calls.some((call) => call.operation === 'Transactions'));
 });

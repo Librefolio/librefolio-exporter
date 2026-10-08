@@ -147,18 +147,23 @@ await waitFor('export enabled', () => on('lfx-export', 'function () { return !th
 assert.equal(await on('lfx-risk', visible), false);
 
 await on('lfx-export', click);
-const status = await waitFor(
+const outcome = await waitFor(
   'export finished',
   async () => {
-    const value = await on('lfx-status', 'function () { return { className: this.className, text: this.textContent }; }');
-    return /success|error/.test(value.className) ? value : null;
+    const error = await on('lfx-status', 'function () { return /error/.test(this.className) ? this.textContent : ""; }');
+    if (error) return { error };
+    const items = await on('lfx-result', 'function () { return this.hidden ? null : Array.from(this.children, (item) => item.textContent); }');
+    return items ? { items } : null;
   },
   30000,
 );
-assert.deepEqual(status, {
-  className: 'status success',
-  text: 'Fatto: 2 transazioni del broker, 2 del conto deposito. Salvati in Download.',
-});
+assert.equal(outcome.error, undefined, outcome.error);
+assert.equal(outcome.items.length, 2);
+assert.match(outcome.items[0], /^✅ scalable-broker_\S+\.csv — 2 transazioni del conto broker$/);
+assert.match(outcome.items[1], /^✅ scalable-deposit_\S+\.csv — 2 movimenti del conto deposito$/);
+assert.equal(await on('lfx-result-folder', 'function () { return this.textContent; }'), '📁 Cartella: Download');
+await shot('result');
+await shot('panel-result', await box('lfx-panel'));
 
 // Only complete files: Chromium writes into .crdownload first.
 const csvFiles = () => (fs.existsSync(SAVED) ? fs.readdirSync(SAVED).filter((name) => name.endsWith('.csv')).sort() : []);

@@ -1,206 +1,83 @@
 # LibreFolio Exporter
 
-A browser extension that exports your broker transactions to CSV files that
-[LibreFolio](https://github.com/Librefolio/LibreFolio) can import.
-
-It currently supports **Scalable Capital**, for both the **broker account** and the
+Export your **Scalable Capital** transactions to CSV files for
+[LibreFolio](https://github.com/Librefolio/LibreFolio): the **broker account** and the
 **overnight account** (*conto deposito*, *Tagesgeld*), on every plan, FREE included.
-It runs only in your browser: no server, no credentials, no data sent anywhere.
 
-> **Status: early preview (0.x).** It is installed by hand from the GitHub releases.
-> It is built on the web app's internal interface, which Scalable can change at any time.
-> Not affiliated with, or endorsed by, Scalable Capital.
+- 🔒 Runs only in your browser: no server, no credentials, no data sent anywhere.
+- 🧪 Early preview (0.x), installed by hand.
+- 🤝 Not affiliated with, or endorsed by, Scalable Capital.
 
-## What it does
+![The LibreFolio button on the Scalable pages](docs/images/button.png)
 
-- On every page of the Scalable web app where you are logged in, a **LibreFolio**
-  button appears in the bottom-right corner.
-- You choose the accounts and the period, and click **Export CSV**.
-- The extension reads your transactions the same way the web page does (same
-  origin, your existing session) and saves one CSV file per account,
-  `scalable-broker_<timestamp>.csv` and `scalable-deposit_<timestamp>.csv`, in the
-  folder you choose in Chrome's *Save as* window.
-- The files use the columns of Scalable's official CSV export, followed by
-  `lf_*` columns with the original values: see [docs/FORMAT.md](docs/FORMAT.md).
-  LibreFolio will import them through its Scalable plugin.
+## 📥 Install
 
-## Install (manual)
+Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 
-Chrome, Edge, Brave and other Chromium browsers, version 120 or later:
-
-1. Download `librefolio-exporter-<version>.zip` from the
-   [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest)
-   and check it against the `.sha256` file published next to it.
-2. Unzip it into a folder that will **stay where it is** (not a folder you clean up).
+1. **Download** `librefolio-exporter-<version>.zip` from the
+   [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest).
+2. **Unzip** it into a folder that will stay where it is, not one you clean up.
 3. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
-   **Developer mode**.
-4. Click **Load unpacked** and select the folder.
+   **Developer mode**, top right:
 
-Only install the extension from this repository's releases.
+   ![Developer mode and the Load unpacked button](docs/images/install-developer-mode.png)
 
-**Update**: download the new release, replace the content of the folder and click the
-reload button of the extension in `chrome://extensions`. The extension tells you when
-a new version is available (see [Update check](#update-check)).
+4. Click **Load unpacked** and choose the folder. The extension appears in the list:
 
-## Use
+   ![The extension in chrome://extensions](docs/images/install-extension-card.png)
 
-1. Log in to Scalable Capital in the browser.
-2. Click **LibreFolio**, accept the notice the first time, choose the accounts and
-   the period, and click **Export CSV**.
+   The ID changes from one computer to another: it depends on the folder.
 
-The extension finds your portfolio on the broker's pages and your overnight account in
-the links and pages of the web app, and remembers them until the browser closes, so that
-both accounts can be exported from any page. If the panel asks you to, open the
-broker's **transactions** page or the overnight account's **Transactions** page once,
-then export again.
+> [!TIP]
+> Install the extension only from this repository's releases. Each ZIP comes with a
+> `.sha256` file to check it.
 
-**How the overnight account is read.** From the browser, Scalable's interest app
-answers only the queries that its own pages send. Its **Transactions** page carries
-the exact query of its transaction list: the extension reads it from that page, when
-it is open or was opened earlier in the browser session, or else loads that page once,
-as the web app does when you click the tab, and then sends the same query, 50
-transactions at a time. Interest details (gross amount, tax withheld) use the query the
-page sends when a transaction is opened. If Scalable asks for a security check before
-showing that page, the panel asks you to open it and to export from there.
+## 🚀 Use
 
-**Accounts.** Click the **Broker account** and **Overnight account** tiles to choose
-which accounts to export.
+1. Log in to Scalable Capital: the **LibreFolio** button appears in the bottom-right
+   corner of every page.
+2. Click it, choose the accounts and the period, and click **Export CSV**.
+3. Choose the folder in Chrome's *Save as* window: the other file goes into the same
+   folder.
 
-**Period.** The first export reads the whole history. The extension then remembers,
-for each account, the date up to which it was exported: **From** defaults to the
-oldest of these dates among the chosen accounts, so only new transactions are read and
-nothing is skipped; LibreFolio recognises the transactions it already has. An account
-never exported starts from the beginning. **To** defaults to today. The buttons
-**1M**, **3M**, **1Y** and **All** set the period up to today, and **Since last
-export** starts from those dates. The form keeps its values while you move between
-pages, for the current day.
+<img src="docs/images/panel.png" alt="The panel after an export" width="400">
 
-**Saving.** At every export, Chrome's *Save as* window asks where to save each file;
-the second one opens in the folder chosen for the first. Under *Saving* you can change
-the start of the file names (`scalable` by default).
+The first export reads the whole history. The next ones start from the last export
+(**Since last**), so only new transactions are read.
 
-**Progress.** A bar shows that the export is running; the steps are written in the
-browser console (see [Diagnostics](#diagnostics)).
+You get one file per account, `scalable-broker_<date>_<time>.csv` and
+`scalable-deposit_<date>_<time>.csv`, with the columns of Scalable's official export
+([format](docs/FORMAT.md)). LibreFolio will import them through its Scalable plugin.
 
-## Risks
+## 🔄 Update
 
-Scalable's client terms allow it to block access to the client area for security
-reasons. From the Italian client documentation in force since 1 September 2026,
-*Termini e Condizioni Generali*, §4.5 (the English version is in the same document):
+The panel tells you when a new version exists. Download it, replace the content of the
+folder, and click the reload button (⟳) of the extension in `chrome://extensions`.
 
-> «Suspicion of unauthorised or abusive access arise, in particular, if attempts to log
-> on to the Platform fail repeatedly, if the login credentials check repeatedly yields a
-> negative result and/or if there are plausible indications of the use of computer
-> programs to access the Platform.»
+## 🛡️ Privacy and risks
 
-The terms do not say what counts as such an indication. This extension is built for
-**light use**, so that the risk stays low:
+- 🔒 **Privacy**: your data stays in your browser and on your computer. The only other
+  request is the update check to GitHub. Details in [PRIVACY.md](PRIVACY.md).
+- ⚠️ **Risks**: the extension uses the web app's internal interface, which Scalable can
+  change at any time, and Scalable's terms allow it to block access when it suspects
+  that programs are being used. The extension is built for light use: read
+  [docs/RISKS.md](docs/RISKS.md) before using it.
 
-- it only runs when you click, inside your own logged-in browser;
-- it never touches your credentials, cookies or two-factor codes;
-- requests go one at a time, with a random pause of 0.3–0.7 seconds between them, and
-  it backs off when Scalable answers "too many requests";
-- details cost one request each, per executed trade (fees and taxes) and per interest
-  payment of the overnight account (gross amount and tax), and can be turned off;
-- the overnight account is read with the web app's own queries, so it never sends
-  queries that Scalable would refuse;
-- after the first export, only new transactions are read.
+## 📚 More
 
-The risk grows with **intensive use**, for example exporting your whole history many
-times a day. If Scalable blocks your access, contact its support. Use the extension at
-your own risk.
+- [How it works](docs/HOW-IT-WORKS.md): accounts, period, saving, update check,
+  permissions, diagnostics.
+- [CSV format](docs/FORMAT.md).
+- [Development](docs/DEVELOPMENT.md): tests, structure, release.
+- [Changelog](CHANGELOG.md).
 
-Scalable also offers an official interface, *Agentic Investing* (CLI and MCP),
-activated from Profile › Security on the web.
-
-## Privacy
-
-Everything happens in your browser. The extension reads your transactions from
-Scalable and writes them to files on your computer, and nothing else. The only other
-request is the update check to GitHub, which sends no personal data.
-Details in [PRIVACY.md](PRIVACY.md).
-
-## Update check
-
-The top of the panel shows the version of the extension and whether a newer one
-exists. When you open the panel, the extension asks GitHub for the latest release of
-this repository (`api.github.com`), at most once a day; **Check for updates** asks
-again right away. GitHub answers at most 60 such requests per hour from the same IP
-address: on a network shared by many people, such as an office network, the check can
-fail; it works again later.
-
-## Permissions
-
-| Permission | Why |
-|---|---|
-| Access to `*.scalable.capital` (content script) | Show the button and read your transactions from the web app. The login (`secure.scalable.capital`) and MCP hosts are excluded. |
-| `storage` | Remember your settings, the date of each account's last export, the update-check result and the portfolio and overnight accounts seen on the pages; until the browser closes, the query of the overnight account's list. |
-| `downloads` | Save the CSV files in the folder you chose inside your download directory, or open the browser's *Save as* window. The extension also gives its own files their names when another extension renames downloads; it leaves other downloads untouched. |
-
-No other host and no other permission. At install time Chrome warns that the extension
-can read and change data on `scalable.capital` sites and manage your downloads: that is
-the access above.
-
-## Diagnostics
-
-Open the browser console on the Scalable page (Cmd+Option+J on macOS, Ctrl+Shift+J
-elsewhere) and filter on `LibreFolio Exporter`. Each export is one collapsed group:
-open it to see the details. It lists where the
-identifiers were found (not the identifiers), where the query of the overnight
-account's list came from (the page, the session memory or a download of the page),
-every request (operation, path, HTTP status, duration) and, at the end, a table with the structure
-of the export: kinds, statuses, signs and counts. It never prints identifiers, amounts
-or descriptions, so you can paste it into an issue.
-
-When something fails, the panel also shows a *technical details* line: include it in
-bug reports.
-
-## Development
-
-No dependencies and no build step: the repository folder is the extension.
-
-```sh
-npm test               # unit tests and an end-to-end test of the content scripts (node:test)
-npm run check          # manifest, locales, syntax and safety rules
-npm run package        # dist/librefolio-exporter-<version>.zip and its .sha256
-sh tests/browser/run.sh  # real browser against a fake Scalable server (see below)
-```
-
-`tests/browser/run.sh` loads the extension into Microsoft Edge (or `BROWSER=` any
-Chromium that still accepts `--load-extension`; Google Chrome 137+ does not), maps
-`de.scalable.capital` to a local fake server and drives a full export over the DevTools
-protocol. Use it for interface work, so that your real account only sees the requests
-of real tests.
-
-Load the repository folder with **Load unpacked** to try changes, then click the
-extension's reload button after each edit.
-
-| Path | Content |
-|---|---|
-| `manifest.json` | Manifest V3 |
-| `src/shared/` | Number and date helpers, CSV writer, file names and download payloads, version comparison, UI strings (en, it, fr, es) |
-| `src/brokers/scalable/` | GraphQL queries, client, identifier discovery, CSV mapping, export orchestration |
-| `src/content/` | Floating button and panel (`ui.js`), entry point (`main.js`), logo (`logo.js`, generated from `icons/icon-48.png` by `node scripts/build-logo.js`) |
-| `src/background.js` | Downloads, identifiers seen on the pages (session memory), update check |
-| `tests/` | `node:test` suites |
-| `tests/browser/` | Real-browser smoke test with a fake Scalable server |
-
-Rules kept by `npm run check`: no HTML built from strings, no `eval`, no remote code,
-no URL other than the broker's own origin and this repository on GitHub.
-
-### Release
-
-1. Set the same version in `manifest.json` and `package.json`, and add it to
-   `CHANGELOG.md`.
-2. Push the tag `v<version>`: the release workflow tests, packages and publishes the
-   ZIP and its SHA-256.
-
-## Credits
+## 🙏 Credits
 
 The GraphQL operations follow those used by public projects, first of all
 [Scalable-Capital-Transactions-Exporter](https://github.com/matthesvoss/Scalable-Capital-Transactions-Exporter)
-by Matthes Voß (MIT). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+by Matthes Voß (MIT). The account icons come from [Phosphor Icons](https://phosphoricons.com)
+(MIT). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## License
+## 📜 License
 
 [GNU Affero General Public License v3.0](LICENSE), like LibreFolio.

@@ -40,11 +40,8 @@ p { margin: 6px 0; }
   background: transparent; color: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .small-button:hover { border-color: #2f6b3a; }
 .small-button:disabled { opacity: 0.6; cursor: default; }
-.save-summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #b8c2cc; border-radius: 8px; }
-.save-summary .grow { font-weight: 600; }
 .names { margin: 2px 0 0; padding-left: 18px; }
 .names li { overflow-wrap: anywhere; }
-.save-editor { margin-top: 8px; padding: 10px; border-radius: 8px; background: rgba(127, 127, 127, 0.1); }
 .row { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0; }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px 10px;
@@ -76,11 +73,18 @@ input:disabled { opacity: 0.55; }
 .chip:hover { border-color: #2f6b3a; }
 .hint { color: #52606d; font-size: 12px; overflow-wrap: anywhere; }
 .actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.actions .primary { margin-left: auto; }
+.progress-label { margin: 6px 0 0; }
+.result { margin: 10px 0 0; padding: 0; list-style: none; color: #2f6b3a; }
+.result li { margin: 4px 0; overflow-wrap: anywhere; }
+.result .what { color: inherit; }
+.result-folder { margin: 6px 0 0; color: #2f6b3a; font-size: 12px; overflow-wrap: anywhere; }
 .primary, .secondary { padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .primary { border: none; background: #2f6b3a; color: #fff; }
 .primary:disabled { background: #9aa5b1; cursor: not-allowed; }
 .secondary { border: 1px solid #b8c2cc; background: transparent; color: inherit; }
 .status { margin-top: 10px; min-height: 1.2em; }
+.status:empty { margin-top: 0; min-height: 0; }
 .status.error { color: #b42318; }
 .status.success { color: #2f6b3a; }
 .warnings { margin: 6px 0 0; padding-left: 18px; color: #8a4b08; }
@@ -97,7 +101,7 @@ a { color: #3a63a8; }
   footer { border-top-color: #3e4c59; }
   .warnings { color: #f7c27a; }
   .status.error { color: #ff8a80; }
-  .status.success { color: #8fd19e; }
+  .status.success, .result, .result-folder { color: #8fd19e; }
   a { color: #8fb5ec; }
 }
 `;
@@ -121,7 +125,6 @@ a { color: #3a63a8; }
   const STROKED = {
     download: ['M12 3v12m0 0l-5-5m5 5l5-5M4 20h16'],
     refresh: ['M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7'],
-    folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
   };
 
   // Phosphor Icons (MIT), filled, on a 256-unit grid: chart-line-fill, piggy-bank-fill and
@@ -285,8 +288,8 @@ a { color: #3a63a8; }
       sinceLastChip.hidden = !sinceLastDate();
     }
 
-    // Saving: Chrome's window picks the folder at every export; only the start of the
-    // file names is a setting.
+    // Saving: Chrome's "Save as" window picks the folder at every export; only the start of
+    // the file names is a setting.
     const prefixInput = el('input', { type: 'text', id: 'lfx-prefix', maxlength: '60', spellcheck: 'false', autocomplete: 'off', 'data-testid': 'lfx-prefix' });
     const brokerName = el('li', { 'data-testid': 'lfx-file-name-broker' });
     const depositName = el('li', { 'data-testid': 'lfx-file-name-deposit' });
@@ -294,19 +297,10 @@ a { color: #3a63a8; }
       el('span', { text: t('fileNamesLabel') }),
       el('ul', { class: 'names' }, [brokerName, depositName]),
     ]);
-    const saveEditButton = el('button', { class: 'small-button', type: 'button', 'aria-expanded': 'false', 'data-testid': 'lfx-save-edit', text: t('saveEdit') });
-    const saveEditor = el('div', { class: 'save-editor', hidden: true, 'data-testid': 'lfx-save-editor' }, [
-      el('div', { class: 'grid' }, [el('label', { for: 'lfx-prefix', text: t('filePrefix') }), prefixInput]),
-    ]);
     const saveSection = [
       el('h3', { text: t('saving') }),
-      el('div', { class: 'save-summary', 'data-testid': 'lfx-save' }, [
-        icon('folder'),
-        el('span', { class: 'grow', 'data-testid': 'lfx-save-target', text: t('saveTargetAsk') }),
-        saveEditButton,
-      ]),
+      el('div', { class: 'grid' }, [el('label', { for: 'lfx-prefix', text: t('filePrefix') }), prefixInput]),
       namesHint,
-      saveEditor,
     ];
 
     function refreshSaveSection() {
@@ -324,6 +318,9 @@ a { color: #3a63a8; }
     const cancelButton = el('button', { class: 'secondary', type: 'button', hidden: true, 'data-testid': 'lfx-cancel', text: t('cancelButton') });
     const progressBar = el('div', { class: 'bar' });
     const progress = el('div', { class: 'progress indeterminate', role: 'progressbar', hidden: true, 'aria-label': t('exporting'), 'data-testid': 'lfx-progress' }, [progressBar]);
+    const progressLabel = el('p', { class: 'hint progress-label', hidden: true, 'aria-live': 'polite', 'data-testid': 'lfx-progress-label' });
+    const result = el('ul', { class: 'result', hidden: true, 'data-testid': 'lfx-result' });
+    const resultFolder = el('p', { class: 'result-folder', hidden: true, 'data-testid': 'lfx-result-folder' });
     const status = el('div', { class: 'status', role: 'status', 'aria-live': 'polite', 'data-testid': 'lfx-status' });
     const warnings = el('ul', { class: 'warnings', hidden: true, 'data-testid': 'lfx-warnings' });
     const riskFooterLink = el('a', { href: options.infoUrl, target: '_blank', rel: 'noopener noreferrer', hidden: true, text: t('riskLink') });
@@ -346,9 +343,12 @@ a { color: #3a63a8; }
       lastExportLine,
       el('label', { class: 'row' }, [detailsBox, el('span', { text: t('includeDetails') })]),
       ...saveSection,
-      el('div', { class: 'actions' }, [exportButton, cancelButton]),
+      el('div', { class: 'actions' }, [cancelButton, exportButton]),
       progress,
+      progressLabel,
       status,
+      result,
+      resultFolder,
       warnings,
       el('footer', {}, [el('div', {}, [t('notAffiliated'), ' ', riskFooterLink])]),
     ]);
@@ -384,12 +384,6 @@ a { color: #3a63a8; }
     for (const input of [detailsBox, fromInput, toInput]) input.addEventListener('change', formChanged);
     cancelButton.addEventListener('click', () => options.onCancel());
     updateButton.addEventListener('click', () => options.onCheckUpdates());
-    saveEditButton.addEventListener('click', () => {
-      const opening = saveEditor.hidden;
-      saveEditor.hidden = !opening;
-      saveEditButton.textContent = t(opening ? 'saveEditDone' : 'saveEdit');
-      saveEditButton.setAttribute('aria-expanded', String(opening));
-    });
     prefixInput.addEventListener('input', refreshSaveSection);
     prefixInput.addEventListener('change', storeSaveSettings);
 
@@ -465,11 +459,13 @@ a { color: #3a63a8; }
           control.disabled = state.busy;
         }
         progress.hidden = !state.busy;
-        if (state.busy) api.setProgress(null);
+        progressLabel.hidden = !state.busy;
+        if (state.busy) api.setProgress(null, '');
         refreshExportButton();
       },
-      // fraction: from 0 to 1, or null while the amount of work is not known.
-      setProgress(fraction) {
+      // fraction: from 0 to 1, or null while the amount of work is not known; label: the step.
+      setProgress(fraction, label) {
+        if (label !== undefined) progressLabel.textContent = label || '';
         const known = typeof fraction === 'number' && Number.isFinite(fraction);
         progress.className = known ? 'progress' : 'progress indeterminate';
         const percent = known ? Math.round(Math.min(1, Math.max(0, fraction)) * 100) : 0;
@@ -479,6 +475,18 @@ a { color: #3a63a8; }
       setStatus(text, kind) {
         status.textContent = text || '';
         status.className = kind ? `status ${kind}` : 'status';
+      },
+      // items: [{ account, name, text }], one per saved file; null clears the list.
+      setResult(items, folder) {
+        const list = Array.isArray(items) ? items : [];
+        result.replaceChildren(
+          ...list.map((item) =>
+            el('li', { 'data-testid': `lfx-result-${item.account}` }, ['✅ ', el('strong', { text: item.name }), el('span', { class: 'what', text: ` — ${item.text}` })]),
+          ),
+        );
+        result.hidden = list.length === 0;
+        resultFolder.textContent = list.length > 0 && folder ? `📁 ${folder}` : '';
+        resultFolder.hidden = !resultFolder.textContent;
       },
       setWarnings(list) {
         warnings.replaceChildren(...list.map((text) => el('li', { text })));
