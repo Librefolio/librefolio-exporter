@@ -1,0 +1,31 @@
+name: Release
+
+# Push a tag such as v0.1.0 (equal to the manifest version) to publish
+# librefolio-exporter-<version>.zip and its SHA-256 as a GitHub release.
+# The extension's update check reads the latest release of this repository.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Tag must match the manifest version
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./manifest.json').version")"
+      - run: npm test
+      - run: npm run package
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --title "$GITHUB_REF_NAME" --notes-file CHANGELOG.md

@@ -1,0 +1,19 @@
+# Build output
+dist/
+*.zip
+*.crx
+
+# Never commit extension signing keys
+*.pem
+
+# Tooling
+node_modules/
+coverage/
+*.log
+
+# Exports produced while testing: they contain personal financial data
+*.csv
+!tests/fixtures/*.csv
+
+# OS
+.DS_Store

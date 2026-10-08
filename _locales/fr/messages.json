@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "LibreFolio Exporter",
+    "description": "Extension name. Must not contain third-party brand names."
+  },
+  "extDescription": {
+    "message": "Exporte les transactions de votre courtier en fichiers CSV pour LibreFolio. Prend en charge Scalable Capital (courtier et compte d'épargne). Fonctionne uniquement dans votre navigateur.",
+    "description": "Extension description shown in the browser."
+  }
+}

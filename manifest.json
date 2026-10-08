@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extName__",
+  "description": "__MSG_extDescription__",
+  "version": "0.1.0",
+  "default_locale": "en",
+  "homepage_url": "https://github.com/Librefolio/librefolio-exporter",
+  "minimum_chrome_version": "120",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.scalable.capital/*"],
+      "exclude_matches": ["https://secure.scalable.capital/*", "https://mcp.scalable.capital/*"],
+      "js": [
+        "src/shared/format.js",
+        "src/shared/version.js",
+        "src/shared/csv.js",
+        "src/shared/i18n.js",
+        "src/brokers/scalable/queries.js",
+        "src/brokers/scalable/client.js",
+        "src/brokers/scalable/discovery.js",
+        "src/brokers/scalable/mapping.js",
+        "src/brokers/scalable/exporter.js",
+        "src/content/ui.js",
+        "src/content/main.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

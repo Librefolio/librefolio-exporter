@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "LibreFolio Exporter",
+    "description": "Extension name. Must not contain third-party brand names."
+  },
+  "extDescription": {
+    "message": "Exporta las transacciones de tu bróker a archivos CSV para LibreFolio. Compatible con Scalable Capital (bróker y cuenta de ahorro). Funciona solo en tu navegador.",
+    "description": "Extension description shown in the browser."
+  }
+}
