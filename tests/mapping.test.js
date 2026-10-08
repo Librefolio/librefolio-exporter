@@ -192,4 +192,55 @@ test('overnight-account transactions map to cash rows', () => {
   assert.equal(row.lf_account_index, '2');
   assert.equal(row.lf_amount, '3.21');
   assert.equal(row.lf_subtype, 'INTEREST');
+  assert.equal(row.lf_details, 'no', 'interest whose details were not read');
+  assert.equal(row.lf_gross_amount, '');
+});
+
+test('interest details add the gross amount, the withheld tax and the reference', () => {
+  const interest = { id: 'd1', type: 'CASH_TRANSACTION', status: 'SETTLED', amount: 11.05, currency: 'EUR', lastEventDateTime: '2026-09-30T22:00:00Z', cashTransactionType: 'INTEREST' };
+  const row = mapping.mapDepositTransaction(interest, 1, CONTEXT, {
+    status: 'yes',
+    details: { isCancellation: false, transactionReference: 'REF-1', taxDetails: { grossAmount: 14.93, taxAmount: 3.88 } },
+  });
+  assert.equal(row.amount, '11,05', 'the amount stays the net one, as the web app shows it');
+  assert.equal(row.tax, '3,88');
+  assert.equal(row.reference, 'REF-1');
+  assert.equal(row.lf_transaction_reference, 'REF-1');
+  assert.equal(row.lf_tax_amount, '3.88');
+  assert.equal(row.lf_gross_amount, '14.93');
+  assert.equal(row.lf_is_cancellation, 'false');
+  assert.equal(row.lf_details, 'yes');
+
+  const failed = mapping.mapDepositTransaction(interest, 1, CONTEXT, { status: 'error' });
+  assert.equal(failed.lf_details, 'error');
+  assert.equal(failed.reference, 'd1');
+  assert.equal(failed.tax, '');
+});
+
+test('only interest that was paid needs details', () => {
+  assert.equal(mapping.needsDepositDetails({ cashTransactionType: 'INTEREST', status: 'SETTLED' }), true);
+  assert.equal(mapping.needsDepositDetails({ cashTransactionType: 'INTEREST_PAYMENT', status: 'PENDING' }), true);
+  assert.equal(mapping.needsDepositDetails({ cashTransactionType: 'INTEREST', status: 'CANCELLED' }), false);
+  assert.equal(mapping.needsDepositDetails({ cashTransactionType: 'WITHDRAWAL', status: 'SETTLED' }), false);
+  assert.equal(mapping.needsDepositDetails(null), false);
+  const row = mapping.mapDepositTransaction({ id: 'w1', cashTransactionType: 'WITHDRAWAL', status: 'SETTLED', amount: 1.03 }, 1, CONTEXT);
+  assert.equal(row.lf_details, 'n/a');
+  assert.equal(row.type, 'Withdrawal');
+  assert.equal(row.lf_amount, '1.03', 'kept verbatim, whatever its sign');
+});
+
+test('the gross amount column follows the tax amount column', () => {
+  const names = mapping.LF_COLUMNS.map((column) => column.name);
+  assert.equal(names.indexOf('lf_gross_amount'), names.indexOf('lf_tax_amount') + 1);
+});
+
+test('overnight outflows are negative in the Prime amount, verbatim in lf_amount', () => {
+  const map = (type, amount) => mapping.mapDepositTransaction({ id: 'x', cashTransactionType: type, status: 'SETTLED', amount, currency: 'EUR' }, 1, CONTEXT);
+  assert.deepEqual([map('WITHDRAWAL', 1.03).amount, map('WITHDRAWAL', 1.03).lf_amount], ['-1,03', '1.03']);
+  assert.deepEqual([map('CASH_TRANSFER_OUT', 21500).amount, map('CASH_TRANSFER_OUT', 21500).lf_amount], ['-21500', '21500']);
+  assert.equal(map('CASH_TRANSFER_IN', 6.36).amount, '6,36');
+  assert.equal(map('DEPOSIT', 0.02).amount, '0,02');
+  assert.equal(map('INTEREST', 11.05).amount, '11,05');
+  assert.equal(map('WITHDRAWAL', 0).amount, '0', 'zero stays zero');
+  assert.equal(map('WITHDRAWAL', -5).amount, '-5', 'a sign already present is kept');
 });

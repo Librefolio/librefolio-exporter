@@ -2,7 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { createClient, ExportError, BROKER_PATH, INTEREST_PATH } = require('../src/brokers/scalable/client.js');
+const { DEPOSIT_TRANSACTION_DETAILS } = require('../src/brokers/scalable/queries.js');
 
 const ORIGIN = 'https://de.scalable.capital';
 
@@ -22,7 +24,7 @@ function fakeFetch(handlers) {
   const calls = [];
   const queue = handlers.slice();
   const fetchImpl = async (url, init) => {
-    const call = { url, init, body: JSON.parse(init.body) };
+    const call = { url, init, body: init.body ? JSON.parse(init.body) : null };
     calls.push(call);
     const handler = queue.shift();
     if (!handler) throw new Error(`unexpected request #${calls.length} to ${url}`);
@@ -35,9 +37,28 @@ function brokerPage(transactions, cursor) {
   return { data: { account: { id: 'p', brokerPortfolio: { id: 'pf', moreTransactions: { cursor, total: 3, transactions } } } } };
 }
 
-function depositPage(transactions, cursor) {
-  const moreTransactions = cursor === undefined ? { transactions } : { cursor, transactions };
-  return { data: { account: { savingsAccount: { id: 's', totalAmount: 1000, moreTransactions } } } };
+// The recipe of the Transactions page, as the server-rendered page carries it.
+const RECIPE = {
+  operationName: 'Transactions',
+  query:
+    'query Transactions($personId:ID!$input:SavingsAccountCashTransactionInput!$portfolioId:ID!){account(id:$personId){id savingsAccount(id:$portfolioId){id ...TransactionsListContainer@unmask}}}fragment TransactionsListContainer on SavingsAccount{id moreTransactions(input:$input){cursor total transactions{id amount}}}',
+  variables: { personId: 'short-account-1', portfolioId: 'sav-123456', input: { pageSize: 50 } },
+};
+
+function listPage(transactions, cursor, total) {
+  return { data: { account: { id: 'short-account-1', savingsAccount: { id: 'sav-123456', moreTransactions: { cursor, total, transactions } } } } };
+}
+
+// A Next.js page whose server data carries the recipe, as Apollo writes it.
+function pageHtml(recipe) {
+  const reference = { options: { query: recipe.query, variables: recipe.variables }, queryKey: 'k', stream: '$@7' };
+  const data = `0:{}\n5:["$","$L6",null,{"queryRef":{"$__apollo_queryRef":${JSON.stringify(reference)}}}]\n`;
+  return `<!DOCTYPE html><html><body><script>self.__next_f.push([0])</script><script>self.__next_f.push(${JSON.stringify([1, data])})</script></body></html>`;
+}
+
+function htmlResponse(html, status) {
+  const code = status || 200;
+  return { status: code, ok: code >= 200 && code < 300, type: 'basic', text: async () => html, json: async () => JSON.parse(html) };
 }
 
 function makeClient(handlers, extra) {
@@ -99,19 +120,76 @@ test('persistent 429 becomes a rateLimited error', async () => {
   await assert.rejects(client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error instanceof ExportError && error.code === 'rateLimited');
 });
 
-test('401 and 403 become a session error without retries', async () => {
-  for (const status of [401, 403]) {
+test('401 is an expired session and 403 a refusal, never retried', async () => {
+  for (const [status, code] of [
+    [401, 'session'],
+    [403, 'denied'],
+  ]) {
     const { client, calls } = makeClient([() => respond(status, {})]);
-    await assert.rejects(client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === 'session');
+    await assert.rejects(client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === code);
     assert.equal(calls.length, 1);
   }
 });
 
-test('GraphQL errors are reported, authentication ones as session errors', async () => {
-  let made = makeClient([() => respond(200, { errors: [{ message: 'Cannot query field "x"' }] })]);
-  await assert.rejects(made.client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === 'graphql' && /Cannot query/.test(error.detail));
-  made = makeClient([() => respond(200, { errors: [{ message: 'Unauthorized' }] })]);
-  await assert.rejects(made.client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === 'session');
+test('GraphQL errors are classified: session, refusal or query error', async () => {
+  const cases = [
+    ['Cannot query field "x"', 'graphql'],
+    ['Unauthenticated', 'session'],
+    ['Session expired', 'session'],
+    ['Unauthorized access', 'denied'],
+    ['Forbidden', 'denied'],
+  ];
+  for (const [message, code] of cases) {
+    const { client } = makeClient([() => respond(200, { errors: [{ message }] })]);
+    await assert.rejects(client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => {
+      assert.equal(error.code, code, message);
+      assert.equal(error.detail, message);
+      return true;
+    });
+  }
+});
+
+test('the GraphQL error code and path are kept for diagnostics, classified by the message only', async () => {
+  const entries = [];
+  const { client } = makeClient(
+    [
+      () =>
+        respond(200, {
+          errors: [
+            {
+              message: 'Unauthorized access',
+              path: ['_entities', 0, 'savingsAccount'],
+              extensions: { code: 'UNAUTHENTICATED', classification: 'ExecutionAborted', secondFactorAuthResult: null },
+            },
+          ],
+          data: { account: { savingsAccount: null, __typename: 'Account' } },
+        }),
+    ],
+    { log: (event, data) => entries.push([event, data]) },
+  );
+  await assert.rejects(client.listBrokerTransactions({ personId: 'person-secret-1', portfolioId: 'pf' }), (error) => {
+    assert.equal(error.code, 'denied', 'the session is not expired: the broker still answers');
+    assert.equal(error.detail, 'Unauthorized access [UNAUTHENTICATED]');
+    return true;
+  });
+  const logged = entries.find(([event]) => event === 'graphql-error')[1];
+  assert.deepEqual(logged, {
+    operation: 'moreTransactions',
+    path: BROKER_PATH,
+    message: 'Unauthorized access',
+    code: 'UNAUTHENTICATED',
+    classification: 'ExecutionAborted',
+    at: ['_entities', 0, 'savingsAccount'],
+  });
+});
+
+test('a 400 is read for its GraphQL reason, when it has one', async () => {
+  let made = makeClient([() => respond(400, { errors: [{ message: 'Cannot query field "cursor"' }] })]);
+  await assert.rejects(made.client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === 'graphql' && /cursor/.test(error.detail));
+  made = makeClient([() => respond(400, new SyntaxError('bad json'))]);
+  await assert.rejects(made.client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === 'http' && error.detail === '400');
+  made = makeClient([() => respond(400, { data: {} })]);
+  await assert.rejects(made.client.listBrokerTransactions({ personId: 'p', portfolioId: 'pf' }), (error) => error.code === 'http' && error.detail === '400');
 });
 
 test('unexpected shapes and invalid JSON are reported as unexpected', async () => {
@@ -138,95 +216,133 @@ test('an aborted signal cancels before any request', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('transaction details and savings accounts are extracted', async () => {
+test('broker transaction details are extracted', async () => {
   const { client, calls } = makeClient([
     () => respond(200, { data: { account: { brokerPortfolio: { transactionDetails: { id: 'a', averagePrice: 10 } } } } }),
-    () => respond(200, { data: { account: { savingsAccounts: [{ __typename: 'OvernightSavingsAccount', id: 's1' }, null, { id: '' }] } } }),
   ]);
   const details = await client.getTransactionDetails({ personId: 'p', portfolioId: 'pf', transactionId: 'a' });
   assert.equal(details.averagePrice, 10);
   assert.equal(calls[0].body.variables.transactionId, 'a');
-  const accounts = await client.listSavingsAccounts({ personId: 'p' });
-  assert.deepEqual(accounts, [{ __typename: 'OvernightSavingsAccount', id: 's1' }]);
+  assert.equal(calls[0].init.headers['x-scacap-features-enabled'], 'CRYPTO_MULTI_ETP,UNIQUE_SECURITY_ID');
 });
 
-test('the overnight account is read with the cursor when available', async () => {
-  const { client, calls } = makeClient([
-    () => respond(200, depositPage([{ id: 'd1' }], 'k1')),
-    () => respond(200, depositPage([{ id: 'd2' }], null)),
+test('the Transactions page gives the recipe of the overnight list, read as text', async () => {
+  const { client, calls } = makeClient([() => htmlResponse(pageHtml(RECIPE))]);
+  const recipe = await client.getDepositRecipe('sav-123456');
+  assert.deepEqual(recipe, RECIPE);
+  assert.equal(calls[0].url, ORIGIN + '/interest/overnight/sav-123456/transactions/');
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.redirect, 'manual', 'a login or a security check is never followed');
+  assert.equal(calls[0].init.credentials, 'same-origin');
+});
+
+test('a redirect, or a page without a usable recipe, asks for the Transactions page', async () => {
+  const filtered = Object.assign({}, RECIPE, { variables: Object.assign({}, RECIPE.variables, { input: { pageSize: 50, type: ['DEPOSIT'] } }) });
+  const otherAccount = Object.assign({}, RECIPE, { variables: Object.assign({}, RECIPE.variables, { portfolioId: 'sav-999999' }) });
+  const cases = [
+    ['redirect', () => ({ status: 0, ok: false, type: 'opaqueredirect' }), 'redirect'],
+    ['no data', () => htmlResponse('<!DOCTYPE html><html><body>Login</body></html>'), 'no transaction list in the page'],
+    ['filtered', () => htmlResponse(pageHtml(filtered)), 'no transaction list in the page'],
+    ['another account', () => htmlResponse(pageHtml(otherAccount)), 'no transaction list in the page'],
+  ];
+  for (const [name, handler, detail] of cases) {
+    const { client, calls } = makeClient([handler]);
+    await assert.rejects(client.getDepositRecipe('sav-123456'), (error) => {
+      assert.equal(error.code, 'depositPage', name);
+      assert.equal(error.detail, detail, name);
+      return true;
+    });
+    assert.equal(calls.length, 1, `${name}: never retried`);
+  }
+});
+
+test('the overnight list is read with the page’s own query, page by page with the cursor', async () => {
+  const { client, calls, sleeps } = makeClient([
+    () => respond(200, listPage([{ id: 'd1' }, { id: 'd2' }], 'c1', 3)),
+    () => respond(200, listPage([{ id: 'd3' }], null, 3)),
   ]);
-  const result = await client.listDepositTransactions({ personId: 'p', savingsAccountId: 's1' });
-  assert.deepEqual(result.transactions.map((item) => item.id), ['d1', 'd2']);
+  const pages = [];
+  const result = await client.listDepositTransactions({ recipe: RECIPE, savingsAccountId: 'sav-123456', onPage: (page) => pages.push(page) });
+  assert.deepEqual(result.transactions.map((item) => item.id), ['d1', 'd2', 'd3']);
+  assert.equal(result.total, 3);
   assert.equal(result.complete, true);
-  assert.equal(result.balance, 1000);
-  assert.equal(calls[0].url, ORIGIN + BROKER_PATH);
-  assert.equal(calls[1].body.variables.input.cursor, 'k1');
-  assert.match(calls[0].body.query, /cursor/);
+  assert.deepEqual(pages, [1, 2]);
+  assert.deepEqual(sleeps, [300]);
+  assert.equal(calls[0].url, ORIGIN + INTEREST_PATH);
+  assert.equal(calls[0].body.operationName, 'Transactions');
+  assert.equal(calls[0].body.query, RECIPE.query.replace('@unmask', ''), 'the client-only @unmask directive is removed');
+  assert.deepEqual(calls[0].body.variables, RECIPE.variables, 'the first page uses the page’s own variables');
+  assert.deepEqual(calls[1].body.variables, { personId: 'short-account-1', portfolioId: 'sav-123456', input: { pageSize: 50, cursor: 'c1' } });
+  assert.equal(calls[0].init.headers['x-scacap-features-enabled'], undefined);
+  assert.equal(calls[0].init.referrer, ORIGIN + '/interest/overnight/sav-123456/transactions/');
+  assert.deepEqual(RECIPE.variables.input, { pageSize: 50 }, 'the recipe itself is never changed');
 });
 
-test('without cursor support the overnight account falls back to one large page', async () => {
-  const { client, calls } = makeClient([
-    () => respond(200, { errors: [{ message: 'Cannot query field "cursor"' }] }),
-    () => respond(200, depositPage([{ id: 'd1' }])),
-  ]);
-  const result = await client.listDepositTransactions({ personId: 'p', savingsAccountId: 's1' });
-  assert.deepEqual(result.transactions.map((item) => item.id), ['d1']);
-  assert.equal(result.complete, true);
-  assert.doesNotMatch(calls[1].body.query, /cursor/);
-  assert.equal(calls[1].body.variables.input.pageSize, 200);
-});
-
-test('when the broker endpoint cannot serve it, the interest endpoint is used', async () => {
-  const { client, calls } = makeClient([
-    () => respond(404, {}),
-    () => respond(404, {}),
-    () => respond(200, depositPage([{ id: 'd1' }], null)),
-  ]);
-  const result = await client.listDepositTransactions({ personId: 'p', savingsAccountId: 'acc/1' });
-  assert.equal(result.transactions.length, 1);
-  assert.equal(calls[2].url, ORIGIN + INTEREST_PATH);
-  assert.equal(calls[2].init.headers['x-scacap-features-enabled'], undefined);
-  assert.equal(calls[2].init.referrer, `${ORIGIN}/interest/overnight/acc%2F1`);
-});
-
-test('session errors on the overnight account are not swallowed by the fallbacks', async () => {
-  const { client, calls } = makeClient([() => respond(401, {})]);
-  await assert.rejects(client.listDepositTransactions({ personId: 'p', savingsAccountId: 's1' }), (error) => error.code === 'session');
-  assert.equal(calls.length, 1);
-});
-
-test('a full single page is reported as possibly incomplete', async () => {
-  const many = Array.from({ length: 200 }, (_, index) => ({ id: `d${index}` }));
-  const { client } = makeClient([
-    () => respond(200, { errors: [{ message: 'Unknown field cursor' }] }),
-    () => respond(200, depositPage(many)),
-  ]);
-  const result = await client.listDepositTransactions({ personId: 'p', savingsAccountId: 's1' });
+test('a list shorter than its total is incomplete; one stopped at the period is complete', async () => {
+  let made = makeClient([() => respond(200, listPage([{ id: 'd1' }], null, 2))]);
+  let result = await made.client.listDepositTransactions({ recipe: RECIPE, savingsAccountId: 'sav-123456' });
   assert.equal(result.complete, false);
+
+  made = makeClient([() => respond(200, listPage([{ id: 'd1' }], 'c1', 9))]);
+  result = await made.client.listDepositTransactions({ recipe: RECIPE, savingsAccountId: 'sav-123456', stopWhen: () => true });
+  assert.equal(result.complete, true);
+  assert.equal(made.calls.length, 1);
+
+  made = makeClient([() => respond(200, { data: { account: { savingsAccount: null } } })]);
+  await assert.rejects(made.client.listDepositTransactions({ recipe: RECIPE, savingsAccountId: 'sav-123456' }), (error) => error.code === 'unexpected');
+});
+
+test('overnight transaction details use the query the page sends, character by character', async () => {
+  const details = { __typename: 'SavingsAccountCashTransaction', id: 'd1', taxDetails: { grossAmount: 14.93, taxAmount: 3.88 } };
+  const { client, calls } = makeClient([
+    () => respond(200, { data: { account: { savingsAccount: { id: 'sav-123456', transactionDetails: details } } } }),
+    () => respond(200, { data: { account: { savingsAccount: { id: 'sav-123456', transactionDetails: null } } } }),
+  ]);
+  const read = await client.getDepositTransactionDetails({ personId: 'short-account-1', savingsAccountId: 'sav-123456', transactionId: 'd1' });
+  assert.deepEqual(read, details);
+  assert.equal(calls[0].url, ORIGIN + INTEREST_PATH);
+  assert.equal(calls[0].body.operationName, 'OvernightTransactionDetails');
+  assert.equal(calls[0].body.query, DEPOSIT_TRANSACTION_DETAILS);
+  assert.deepEqual(calls[0].body.variables, { personId: 'short-account-1', savingsAccountId: 'sav-123456', transactionId: 'd1' });
+  assert.equal(calls[0].init.headers['x-scacap-features-enabled'], undefined);
+  assert.equal(calls[0].init.referrer, ORIGIN + '/interest/overnight/sav-123456/transactions/');
+  await assert.rejects(client.getDepositTransactionDetails({ personId: 'short-account-1', savingsAccountId: 'sav-123456', transactionId: 'd2' }), (error) => error.code === 'unexpected');
+});
+
+test('the details query is pinned: an accidental edit would stop the server from accepting it', () => {
+  assert.equal(DEPOSIT_TRANSACTION_DETAILS.length, 1398);
+  assert.equal(createHash('sha256').update(DEPOSIT_TRANSACTION_DETAILS).digest('hex').slice(0, 16), 'ec7f7f30bb2372b8');
 });
 
 test('diagnostics log operations and outcomes, never identifiers', async () => {
   const entries = [];
+  const savingsAccountId = 'sAvInGsEcReT1234567890';
+  const secretRecipe = Object.assign({}, RECIPE, { variables: { personId: 'pErSoNsEcReT1234567890', portfolioId: savingsAccountId, input: { pageSize: 50 } } });
   const { client } = makeClient(
     [
-      () => respond(200, { errors: [{ message: 'Variable "$personId" got invalid value "person-secret-1"' }] }),
-      () => respond(200, { errors: [{ message: 'Cannot query field "cursor"' }] }),
-      () => respond(200, depositPage([{ id: 'd1' }])),
+      () => htmlResponse(pageHtml(secretRecipe)),
+      () => respond(200, { errors: [{ message: 'Variable "$personId" got invalid value "pErSoNsEcReT1234567890"' }] }),
+      () => respond(200, listPage([{ id: 'd1' }], null, 1)),
     ],
     { log: (event, data) => entries.push([event, data]) },
   );
-  await assert.rejects(client.listSavingsAccounts({ personId: 'person-secret-1' }), (error) => {
+  const recipe = await client.getDepositRecipe(savingsAccountId);
+  await assert.rejects(client.listDepositTransactions({ recipe, savingsAccountId }), (error) => {
     assert.equal(error.code, 'graphql');
     assert.equal(error.detail, 'Variable "$personId" got invalid value "…"');
     return true;
   });
-  await client.listDepositTransactions({ personId: 'person-secret-1', savingsAccountId: 'saving-secret-2' });
+  await client.listDepositTransactions({ recipe, savingsAccountId });
+  assert.doesNotMatch(JSON.stringify(entries), /sEcReT/);
+  assert.deepEqual(entries[0], ['request', { operation: 'Transactions page', path: '/interest/overnight/…/transactions/', attempt: 1, status: 200, ms: entries[0][1].ms }]);
+  assert.ok(entries.some(([event, data]) => event === 'overnight-source' && data.transactions === 1 && data.total === 1 && data.complete === true));
+});
 
-  const text = JSON.stringify(entries);
-  assert.doesNotMatch(text, /secret/);
-  assert.deepEqual(entries[0], ['request', { operation: 'getSavingsProducts', path: BROKER_PATH, attempt: 1, status: 200, ms: entries[0][1].ms }]);
-  assert.ok(entries.some(([event, data]) => event === 'overnight-fallback' && data.variant === 'paged' && data.error === 'graphql'));
-  assert.ok(entries.some(([event, data]) => event === 'overnight-source' && data.variant === 'single page' && data.transactions === 1));
+test('safePath hides identifier-like segments only', () => {
+  const { safePath } = require('../src/brokers/scalable/client.js');
+  assert.equal(safePath('/interest/api/graphql/'), '/interest/api/graphql/');
+  assert.equal(safePath('/interest/overnight/AbCdEfGhIjKlMnOpQrStUv'), '/interest/overnight/…');
+  assert.equal(safePath(undefined), '');
 });
 
 test('redact hides every string variable, longest first', () => {

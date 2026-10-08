@@ -13,8 +13,8 @@
   const client = isNode ? require('./client.js') : root.LFX.scalable.client;
   const ExportError = client.ExportError;
 
-  // After these errors, asking for more trade details would only make things worse.
-  const STOP_DETAILS = new Set(['session', 'rateLimited', 'network']);
+  // After these errors, asking for more details would only make things worse.
+  const STOP_DETAILS = new Set(['session', 'denied', 'rateLimited', 'network']);
 
   function berlinDate(timestamp) {
     return format.berlinDateTime(timestamp).date;
@@ -52,6 +52,31 @@
     return result;
   }
 
+  // One request per item, in sequence; a session, access or rate-limit error stops
+  // the remaining requests and flags those items as not read.
+  async function readDetails(items, fetchOne, onProgress) {
+    const detailsById = new Map();
+    let failed = 0;
+    for (let index = 0; index < items.length; index++) {
+      onProgress(index + 1, items.length);
+      try {
+        detailsById.set(items[index].id, { status: 'yes', details: await fetchOne(items[index]) });
+      } catch (error) {
+        if (error && error.code === 'cancelled') throw error;
+        failed++;
+        detailsById.set(items[index].id, { status: 'error' });
+        if (error && STOP_DETAILS.has(error.code)) {
+          for (const rest of items.slice(index + 1)) {
+            detailsById.set(rest.id, { status: 'error' });
+            failed++;
+          }
+          break;
+        }
+      }
+    }
+    return { detailsById, warnings: failed > 0 ? [{ key: 'warnDetails', args: [failed] }] : [] };
+  }
+
   async function exportBroker({ api, ids, options, progress, context }) {
     if (!ids.personId) throw new ExportError('noPerson');
     if (!ids.portfolioId) throw new ExportError('noPortfolio');
@@ -64,35 +89,14 @@
     });
     const selected = uniqueById(summaries).filter((summary) => inRange(summary.lastEventDateTime, options.from, options.to));
 
-    const detailsById = new Map();
-    const warnings = [];
+    let detailsById = new Map();
+    let warnings = [];
     if (options.details) {
-      const pending = selected.filter(mapping.needsDetails);
-      let failed = 0;
-      for (let index = 0; index < pending.length; index++) {
-        const summary = pending[index];
-        progress('progressBrokerDetails', index + 1, pending.length);
-        try {
-          const details = await api.getTransactionDetails({
-            personId: ids.personId,
-            portfolioId: ids.portfolioId,
-            transactionId: summary.id,
-          });
-          detailsById.set(summary.id, { status: 'yes', details });
-        } catch (error) {
-          if (error && error.code === 'cancelled') throw error;
-          failed++;
-          detailsById.set(summary.id, { status: 'error' });
-          if (error && STOP_DETAILS.has(error.code)) {
-            for (const rest of pending.slice(index + 1)) {
-              detailsById.set(rest.id, { status: 'error' });
-              failed++;
-            }
-            break;
-          }
-        }
-      }
-      if (failed > 0) warnings.push({ key: 'warnDetails', args: [failed] });
+      ({ detailsById, warnings } = await readDetails(
+        selected.filter(mapping.needsDetails),
+        (summary) => api.getTransactionDetails({ personId: ids.personId, portfolioId: ids.portfolioId, transactionId: summary.id }),
+        (done, total) => progress('progressBrokerDetails', done, total),
+      ));
     }
 
     const rows = selected.map((summary) =>
@@ -105,34 +109,55 @@
     return { rows, warnings };
   }
 
-  async function exportDeposit({ api, ids, options, progress, context }) {
-    if (!ids.personId) throw new ExportError('noPerson');
-
-    let accounts;
-    try {
-      accounts = await api.listSavingsAccounts({ personId: ids.personId });
-    } catch (error) {
-      const pageIds = ids.savingsAccountIds || [];
-      if (!client.isShapeError(error) || pageIds.length === 0) throw error;
-      accounts = pageIds.map((id) => ({ id }));
+  // The list is read with the recipe of the account's Transactions page: the one in the
+  // open page or remembered in this browser session first, then the one in a fresh copy
+  // of the page. A known recipe that stops working is replaced by a fresh one, once.
+  async function readDepositList({ api, ids, savingsAccountId, options, diagnostics }) {
+    const known = (ids.depositRecipes || {})[savingsAccountId];
+    const candidates = known ? [known, null] : [null];
+    for (const candidate of candidates) {
+      const source = candidate ? candidate.source : 'download';
+      const recipe = candidate ? candidate.recipe : await api.getDepositRecipe(savingsAccountId);
+      diagnostics('overnight-recipe', { source, operation: recipe.operationName });
+      try {
+        const result = await api.listDepositTransactions({ recipe, savingsAccountId, stopWhen: pageEndsBefore(options.from) });
+        return Object.assign({ recipe }, result);
+      } catch (error) {
+        if (!candidate || !(client.isShapeError(error) || client.isAccessError(error))) throw error;
+        diagnostics('overnight-recipe-retry', { source, error: error.code });
+      }
     }
-    const overnight = accounts.filter((account) => !account.__typename || /overnight/i.test(account.__typename));
-    if (overnight.length === 0) return { rows: [], warnings: [{ key: 'warnNoDeposit' }] };
+    throw new ExportError('unexpected', 'overnight recipe');
+  }
+
+  // Overnight accounts: the ids seen on the web app's pages, in this tab or earlier in
+  // this browser session.
+  async function exportDeposit({ api, ids, options, progress, context, diagnostics }) {
+    const accounts = ids.savingsAccountIds || [];
+    if (accounts.length === 0) throw new ExportError('noDepositAccount');
 
     const rows = [];
     const warnings = [];
-    for (let index = 0; index < overnight.length; index++) {
-      progress('progressDeposit', index + 1, overnight.length);
-      const result = await api.listDepositTransactions({
-        personId: ids.personId,
-        savingsAccountId: overnight[index].id,
-        stopWhen: pageEndsBefore(options.from),
-      });
+    for (let index = 0; index < accounts.length; index++) {
+      const savingsAccountId = accounts[index];
+      progress('progressDeposit', index + 1, accounts.length);
+      const result = await readDepositList({ api, ids, savingsAccountId, options, diagnostics });
       if (!result.complete) warnings.push({ key: 'warnDepositPartial', args: [result.transactions.length] });
-      for (const transaction of uniqueById(result.transactions)) {
-        if (inRange(transaction.lastEventDateTime, options.from, options.to)) {
-          rows.push(mapping.mapDepositTransaction(transaction, index + 1, context));
-        }
+      const selected = uniqueById(result.transactions).filter((transaction) => inRange(transaction.lastEventDateTime, options.from, options.to));
+
+      let detailsById = new Map();
+      if (options.details) {
+        const read = await readDetails(
+          selected.filter(mapping.needsDepositDetails),
+          (transaction) =>
+            api.getDepositTransactionDetails({ personId: result.recipe.variables.personId, savingsAccountId, transactionId: transaction.id }),
+          (done, total) => progress('progressDepositDetails', done, total),
+        );
+        detailsById = read.detailsById;
+        warnings.push(...read.warnings);
+      }
+      for (const transaction of selected) {
+        rows.push(mapping.mapDepositTransaction(transaction, index + 1, context, detailsById.get(transaction.id)));
       }
     }
     return { rows, warnings };
@@ -140,15 +165,16 @@
 
   // options: { broker, deposit, details, from, to } with dates as YYYY-MM-DD (or '').
   // Returns { broker: rows|null, deposit: rows|null, warnings, errors }.
-  async function runExport({ api, ids, options, progress, context }) {
+  async function runExport({ api, ids, options, progress, context, diagnostics }) {
     const report = progress || (() => {});
+    const note = diagnostics || (() => {});
     const outcome = { broker: null, deposit: null, warnings: [], errors: [] };
     const sections = [];
     if (options.broker) sections.push(['broker', exportBroker]);
     if (options.deposit) sections.push(['deposit', exportDeposit]);
     for (const [account, run] of sections) {
       try {
-        const result = await run({ api, ids, options, progress: report, context });
+        const result = await run({ api, ids, options, progress: report, context, diagnostics: note });
         outcome[account] = result.rows;
         outcome.warnings.push(...result.warnings);
       } catch (error) {
@@ -185,6 +211,7 @@
         quantity: sign(row.lf_quantity),
         fee: sign(row.lf_transaction_fee),
         tax: sign(row.lf_tax_amount),
+        gross: sign(row.lf_gross_amount),
         details: row.lf_details,
       };
       const key = JSON.stringify(entry);

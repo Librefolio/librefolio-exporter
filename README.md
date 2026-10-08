@@ -13,12 +13,13 @@ It runs only in your browser: no server, no credentials, no data sent anywhere.
 
 ## What it does
 
-- When you open the Scalable web app, a **LibreFolio** button appears in the
-  bottom-right corner.
+- On every page of the Scalable web app where you are logged in, a **LibreFolio**
+  button appears in the bottom-right corner.
 - You choose the accounts and the period, and click **Export CSV**.
 - The extension reads your transactions the same way the web page does (same
-  origin, your existing session) and downloads one CSV file per account:
-  `scalable-broker_<timestamp>.csv` and `scalable-deposit_<timestamp>.csv`.
+  origin, your existing session) and saves one CSV file per account,
+  `scalable-broker_<timestamp>.csv` and `scalable-deposit_<timestamp>.csv`, in the
+  folder you choose in Chrome's *Save as* window.
 - The files use the columns of Scalable's official CSV export, followed by
   `lf_*` columns with the original values: see [docs/FORMAT.md](docs/FORMAT.md).
   LibreFolio will import them through its Scalable plugin.
@@ -44,14 +45,42 @@ a new version is available (see [Update check](#update-check)).
 ## Use
 
 1. Log in to Scalable Capital in the browser.
-2. To export the broker account, open the broker's **transactions** page: the
-   extension reads the portfolio from that page.
-3. Click **LibreFolio**, accept the notice the first time, choose the accounts and
+2. Click **LibreFolio**, accept the notice the first time, choose the accounts and
    the period, and click **Export CSV**.
 
-The first export reads the whole history. Afterwards, **From** defaults to the date of
-the last export, so only new transactions are read; LibreFolio recognises the
-transactions it already has. The browser may ask permission to download two files.
+The extension finds your portfolio on the broker's pages and your overnight account in
+the links and pages of the web app, and remembers them until the browser closes, so that
+both accounts can be exported from any page. If the panel asks you to, open the
+broker's **transactions** page or the overnight account's **Transactions** page once,
+then export again.
+
+**How the overnight account is read.** From the browser, Scalable's interest app
+answers only the queries that its own pages send. Its **Transactions** page carries
+the exact query of its transaction list: the extension reads it from that page, when
+it is open or was opened earlier in the browser session, or else loads that page once,
+as the web app does when you click the tab, and then sends the same query, 50
+transactions at a time. Interest details (gross amount, tax withheld) use the query the
+page sends when a transaction is opened. If Scalable asks for a security check before
+showing that page, the panel asks you to open it and to export from there.
+
+**Accounts.** Click the **Broker account** and **Overnight account** tiles to choose
+which accounts to export.
+
+**Period.** The first export reads the whole history. The extension then remembers,
+for each account, the date up to which it was exported: **From** defaults to the
+oldest of these dates among the chosen accounts, so only new transactions are read and
+nothing is skipped; LibreFolio recognises the transactions it already has. An account
+never exported starts from the beginning. **To** defaults to today. The buttons
+**1M**, **3M**, **1Y** and **All** set the period up to today, and **Since last
+export** starts from those dates. The form keeps its values while you move between
+pages, for the current day.
+
+**Saving.** At every export, Chrome's *Save as* window asks where to save each file;
+the second one opens in the folder chosen for the first. Under *Saving* you can change
+the start of the file names (`scalable` by default).
+
+**Progress.** A bar shows that the export is running; the steps are written in the
+browser console (see [Diagnostics](#diagnostics)).
 
 ## Risks
 
@@ -71,7 +100,10 @@ The terms do not say what counts as such an indication. This extension is built 
 - it never touches your credentials, cookies or two-factor codes;
 - requests go one at a time, with a random pause of 0.3–0.7 seconds between them, and
   it backs off when Scalable answers "too many requests";
-- trade details (fees and taxes) cost one request per trade and can be turned off;
+- details cost one request each, per executed trade (fees and taxes) and per interest
+  payment of the overnight account (gross amount and tax), and can be turned off;
+- the overnight account is read with the web app's own queries, so it never sends
+  queries that Scalable would refuse;
 - after the first export, only new transactions are read.
 
 The risk grows with **intensive use**, for example exporting your whole history many
@@ -85,33 +117,40 @@ activated from Profile › Security on the web.
 
 Everything happens in your browser. The extension reads your transactions from
 Scalable and writes them to files on your computer, and nothing else. The only other
-request is the optional daily update check to GitHub, which sends no personal data.
+request is the update check to GitHub, which sends no personal data.
 Details in [PRIVACY.md](PRIVACY.md).
 
 ## Update check
 
-Once a day, when you open the panel, the extension asks GitHub for the latest
-release of this repository (`api.github.com`) and shows a notice when a newer version
-exists. Turn it off with the checkbox at the bottom of the panel.
+The top of the panel shows the version of the extension and whether a newer one
+exists. When you open the panel, the extension asks GitHub for the latest release of
+this repository (`api.github.com`), at most once a day; **Check for updates** asks
+again right away. GitHub answers at most 60 such requests per hour from the same IP
+address: on a network shared by many people, such as an office network, the check can
+fail; it works again later.
 
 ## Permissions
 
 | Permission | Why |
 |---|---|
 | Access to `*.scalable.capital` (content script) | Show the button and read your transactions from the web app. The login (`secure.scalable.capital`) and MCP hosts are excluded. |
-| `storage` | Remember your settings, the date of the last export and the update-check result. |
+| `storage` | Remember your settings, the date of each account's last export, the update-check result and the portfolio and overnight accounts seen on the pages; until the browser closes, the query of the overnight account's list. |
+| `downloads` | Save the CSV files in the folder you chose inside your download directory, or open the browser's *Save as* window. The extension also gives its own files their names when another extension renames downloads; it leaves other downloads untouched. |
 
-No other host and no other permission. Chrome warns at install time that the extension
-can read and change data on `scalable.capital` sites: that is the access above.
+No other host and no other permission. At install time Chrome warns that the extension
+can read and change data on `scalable.capital` sites and manage your downloads: that is
+the access above.
 
 ## Diagnostics
 
 Open the browser console on the Scalable page (Cmd+Option+J on macOS, Ctrl+Shift+J
-elsewhere) and filter on `LibreFolio Exporter`. During an export it lists where the
-identifiers were found (not the identifiers), every request (operation, HTTP status,
-duration), the fallbacks used for the overnight account and, at the end, a table with
-the structure of the export: kinds, statuses, signs and counts. It never prints
-identifiers, amounts or descriptions, so you can paste it into an issue.
+elsewhere) and filter on `LibreFolio Exporter`. Each export is one collapsed group:
+open it to see the details. It lists where the
+identifiers were found (not the identifiers), where the query of the overnight
+account's list came from (the page, the session memory or a download of the page),
+every request (operation, path, HTTP status, duration) and, at the end, a table with the structure
+of the export: kinds, statuses, signs and counts. It never prints identifiers, amounts
+or descriptions, so you can paste it into an issue.
 
 When something fails, the panel also shows a *technical details* line: include it in
 bug reports.
@@ -139,10 +178,10 @@ extension's reload button after each edit.
 | Path | Content |
 |---|---|
 | `manifest.json` | Manifest V3 |
-| `src/shared/` | Number and date helpers, CSV writer, version comparison, UI strings (en, it, fr, es) |
+| `src/shared/` | Number and date helpers, CSV writer, file names and download payloads, version comparison, UI strings (en, it, fr, es) |
 | `src/brokers/scalable/` | GraphQL queries, client, identifier discovery, CSV mapping, export orchestration |
-| `src/content/` | Floating button and panel (`ui.js`), entry point (`main.js`) |
-| `src/background.js` | Update check |
+| `src/content/` | Floating button and panel (`ui.js`), entry point (`main.js`), logo (`logo.js`, generated from `icons/icon-48.png` by `node scripts/build-logo.js`) |
+| `src/background.js` | Downloads, identifiers seen on the pages (session memory), update check |
 | `tests/` | `node:test` suites |
 | `tests/browser/` | Real-browser smoke test with a fake Scalable server |
 

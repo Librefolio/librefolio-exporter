@@ -51,6 +51,7 @@
     'lf_venue_fee',
     'lf_crypto_spread_fee',
     'lf_tax_amount',
+    'lf_gross_amount',
     'lf_fee',
     'lf_transactional_fee',
     'lf_taxes',
@@ -94,6 +95,9 @@
 
   // Executed trades: the only ones whose details (fees, taxes, price) are read.
   const EXECUTED = new Set(['FILLED', 'SETTLED', 'PARTIAL_FILLED']);
+  const NOT_EXECUTED = new Set(['CANCELLED', 'REJECTED', 'EXPIRED']);
+  // The overnight account lists every amount as positive: these types take money out.
+  const DEPOSIT_OUTFLOW = /WITHDRAWAL|_OUT$/;
 
   function classify(summary) {
     switch (summary && summary.__typename) {
@@ -115,6 +119,11 @@
 
   function needsDetails(summary) {
     return classify(summary) === 'security' && EXECUTED.has(summary.status);
+  }
+
+  // Overnight-account interest: its details carry the gross amount and the withheld tax.
+  function needsDepositDetails(transaction) {
+    return /INTEREST/.test((transaction && transaction.cashTransactionType) || '') && !NOT_EXECUTED.has(transaction.status);
   }
 
   function primeStatus(status) {
@@ -206,20 +215,28 @@
     return row;
   }
 
-  function mapDepositTransaction(transaction, accountIndex, context) {
+  // detailsResult: { status: 'yes' | 'no' | 'error' | 'n/a', details } for interest.
+  function mapDepositTransaction(transaction, accountIndex, context, detailsResult) {
+    const details = (detailsResult && detailsResult.details) || null;
+    const taxDetails = (details && details.taxDetails) || {};
     const when = format.berlinDateTime(transaction.lastEventDateTime);
     const amount = format.toPlainString(transaction.amount);
+    const taxAmount = format.toPlainString(taxDetails.taxAmount);
     const subtype = transaction.cashTransactionType || '';
+    const outflow = DEPOSIT_OUTFLOW.test(subtype) && /^[0-9.]+$/.test(amount) && /[1-9]/.test(amount);
+    const signedAmount = outflow ? `-${amount}` : amount;
+    const isCancellation = details && typeof details.isCancellation === 'boolean' ? details.isCancellation : transaction.isCancellation;
     const row = emptyRow(context);
     Object.assign(row, {
       date: when.date,
       time: when.time,
       status: primeStatus(transaction.status),
-      reference: transaction.id || '',
+      reference: (details && details.transactionReference) || transaction.id || '',
       description: transaction.description || '',
       assetType: 'Cash',
       type: CASH_TO_PRIME[subtype] || subtype || transaction.type || '',
-      amount: format.toDecimalComma(amount),
+      amount: format.toDecimalComma(signedAmount),
+      tax: format.toDecimalComma(taxAmount),
       currency: transaction.currency || '',
       lf_account: 'deposit',
       lf_account_index: String(accountIndex),
@@ -227,9 +244,13 @@
       lf_kind: transaction.type || '',
       lf_subtype: subtype,
       lf_status: transaction.status || '',
+      lf_is_cancellation: booleanText(isCancellation),
       lf_timestamp_utc: transaction.lastEventDateTime || '',
       lf_amount: amount,
-      lf_details: 'n/a',
+      lf_tax_amount: taxAmount,
+      lf_gross_amount: format.toPlainString(taxDetails.grossAmount),
+      lf_transaction_reference: (details && details.transactionReference) || '',
+      lf_details: (detailsResult && detailsResult.status) || (needsDepositDetails(transaction) ? 'no' : 'n/a'),
     });
     return row;
   }
@@ -243,6 +264,8 @@
     CASH_TO_PRIME,
     classify,
     needsDetails,
+    needsDepositDetails,
+    DEPOSIT_OUTFLOW,
     primeStatus,
     primeType,
     mapBrokerTransaction,

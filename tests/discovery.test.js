@@ -96,5 +96,37 @@ test('discover collects everything and reports the sources', () => {
     portfolioId: 'pf-123456',
     portfolioSource: 'url',
     savingsAccountIds: [],
+    savingsSource: null,
   });
+});
+
+test('what the page does not show comes from the same person’s remembered ids', () => {
+  const person = { sessionStorage: fakeStorage({ uniqueId: 'person-123' }) };
+  const remembered = { personId: 'person-123', portfolioId: 'pf-777777', savingsAccountIds: ['sav-999999', 'bad id', 42] };
+
+  const filled = discovery.discover(env(Object.assign({ remembered }, person)));
+  assert.equal(filled.portfolioId, 'pf-777777');
+  assert.equal(filled.portfolioSource, 'remembered');
+  assert.deepEqual(filled.savingsAccountIds, ['sav-999999']);
+  assert.equal(filled.savingsSource, 'remembered');
+
+  const pageWins = discovery.discover(
+    env(
+      Object.assign({ remembered }, person, {
+        location: { search: '?portfolioId=pf-123456', pathname: '/interest/overnight/sav-111111' },
+      }),
+    ),
+  );
+  assert.equal(pageWins.portfolioId, 'pf-123456');
+  assert.equal(pageWins.portfolioSource, 'url');
+  assert.deepEqual(pageWins.savingsAccountIds, ['sav-111111']);
+  assert.equal(pageWins.savingsSource, 'page');
+
+  const otherPerson = discovery.discover(env(Object.assign({ remembered: Object.assign({}, remembered, { personId: 'person-456' }) }, person)));
+  assert.equal(otherPerson.portfolioId, null);
+  assert.deepEqual(otherPerson.savingsAccountIds, []);
+  assert.equal(otherPerson.savingsSource, null);
+
+  const noPerson = discovery.discover(env({ remembered }));
+  assert.equal(noPerson.portfolioId, null, 'without the person, nothing remembered is used');
 });

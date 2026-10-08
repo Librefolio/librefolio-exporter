@@ -12,7 +12,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "downloads"],
   "background": {
     "service_worker": "src/background.js"
   },
@@ -24,12 +24,15 @@
         "src/shared/format.js",
         "src/shared/version.js",
         "src/shared/csv.js",
+        "src/shared/files.js",
         "src/shared/i18n.js",
         "src/brokers/scalable/queries.js",
+        "src/brokers/scalable/flight.js",
         "src/brokers/scalable/client.js",
         "src/brokers/scalable/discovery.js",
         "src/brokers/scalable/mapping.js",
         "src/brokers/scalable/exporter.js",
+        "src/content/logo.js",
         "src/content/ui.js",
         "src/content/main.js"
       ],

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const format = require('../src/shared/format.js');
 const version = require('../src/shared/version.js');
 const csv = require('../src/shared/csv.js');
+const files = require('../src/shared/files.js');
 
 test('toPlainString keeps values verbatim', () => {
   assert.equal(format.toPlainString(-499.99278), '-499.99278');
@@ -81,4 +82,49 @@ test('csv build writes header, rows and a final LF', () => {
   const columns = [{ name: 'date' }, { name: 'description', quote: true }, { name: 'amount' }];
   const text = csv.build(columns, [{ date: '2025-01-01', description: 'ETF', amount: '-1,5' }]);
   assert.equal(text, 'date;description;amount\n2025-01-01;"ETF";-1,5\n');
+});
+
+test('shiftMonths moves by calendar months and clamps the day', () => {
+  assert.equal(format.shiftMonths('2026-10-08', -1), '2026-09-08');
+  assert.equal(format.shiftMonths('2026-10-08', -12), '2025-10-08');
+  assert.equal(format.shiftMonths('2026-03-31', -1), '2026-02-28');
+  assert.equal(format.shiftMonths('2024-03-31', -1), '2024-02-29');
+  assert.equal(format.shiftMonths('2026-01-15', -3), '2025-10-15');
+  assert.equal(format.shiftMonths('2026-12-31', 2), '2027-02-28');
+  assert.equal(format.shiftMonths('not a date', -1), '');
+});
+
+test('file prefix and folder are cleaned for every operating system', () => {
+  assert.equal(files.sanitizePrefix(''), 'scalable');
+  assert.equal(files.sanitizePrefix('  my:export*?  '), 'myexport');
+  assert.equal(files.sanitizePrefix('...hidden.'), 'hidden');
+  assert.equal(files.sanitizeFolder('LibreFolio'), 'LibreFolio');
+  assert.equal(files.sanitizeFolder('/a//b\\c/'), 'a/b/c');
+  assert.equal(files.sanitizeFolder('../../etc'), 'etc', 'never outside the download directory');
+  assert.equal(files.sanitizeFolder('1/2/3/4/5/6/7'), '1/2/3/4/5');
+  assert.equal(files.sanitizeFolder(''), '');
+  assert.equal(files.sanitizeFolder(undefined), '');
+});
+
+test('file names and download paths', () => {
+  assert.deepEqual(files.fileNames('my', '2026-10-08_16-54-20'), {
+    broker: 'my-broker_2026-10-08_16-54-20.csv',
+    deposit: 'my-deposit_2026-10-08_16-54-20.csv',
+  });
+  assert.equal(files.fileNames('', 'x').broker, 'scalable-broker_x.csv');
+  assert.equal(files.downloadPath('LibreFolio', 'a.csv'), 'LibreFolio/a.csv');
+  assert.equal(files.downloadPath('', 'a.csv'), 'a.csv');
+  assert.equal(files.downloadPath('x', '../a?.csv'), 'x/a.csv');
+});
+
+test('data URLs carry the UTF-8 bytes and have a size limit', () => {
+  const text = 'date;description\n2026-10-08;Zinsen für Tagesgeld €\n';
+  const url = files.toDataUrl(text);
+  assert.ok(url.startsWith('data:text/csv;charset=utf-8;base64,'));
+  assert.equal(Buffer.from(url.split(',')[1], 'base64').toString('utf8'), text);
+  assert.equal(files.fitsDataUrl(text), true);
+  const limitBytes = Math.floor((files.MAX_DATA_URL_LENGTH - 'data:text/csv;charset=utf-8;base64,'.length) / 4) * 3;
+  assert.equal(files.fitsDataUrl('a'.repeat(limitBytes)), true);
+  assert.equal(files.fitsDataUrl('a'.repeat(limitBytes + 3)), false);
+  assert.equal(files.fitsDataUrl('€'.repeat(Math.ceil(limitBytes / 3) + 1)), false, 'measured in bytes, not characters');
 });

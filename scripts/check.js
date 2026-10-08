@@ -56,7 +56,7 @@ if (manifest && pkg) {
   if (manifest.background && manifest.background.service_worker) exists(manifest.background.service_worker);
   for (const script of manifest.content_scripts || []) for (const file of script.js || []) exists(file);
 
-  const allowedPermissions = new Set(['storage']);
+  const allowedPermissions = new Set(['storage', 'downloads']);
   for (const permission of manifest.permissions || []) {
     if (!allowedPermissions.has(permission)) fail(`unexpected permission: ${permission}`);
   }
@@ -87,6 +87,11 @@ for (const file of [...listFiles('src', '.js'), ...listFiles('scripts', '.js'), 
   } catch (error) {
     fail(`${file}: ${error.message}`);
   }
+}
+
+const logo = require('./build-logo.js');
+if (fs.readFileSync(path.join(ROOT, logo.TARGET), 'utf8') !== logo.render()) {
+  fail(`${logo.TARGET} is out of date: run node scripts/build-logo.js`);
 }
 
 const ALLOWED_URLS = [

@@ -7,7 +7,16 @@ const { ExportError } = require('../src/brokers/scalable/client.js');
 const mapping = require('../src/brokers/scalable/mapping.js');
 
 const CONTEXT = { exporter: 'librefolio-exporter/0.0.0-test' };
-const IDS = { personId: 'person', portfolioId: 'portfolio', savingsAccountIds: [] };
+const IDS = { personId: 'person', portfolioId: 'portfolio', savingsAccountIds: ['s1'] };
+const RECIPE = {
+  operationName: 'Transactions',
+  query: 'query Transactions($personId:ID!$input:SavingsAccountCashTransactionInput!$portfolioId:ID!){account(id:$personId){savingsAccount(id:$portfolioId){moreTransactions(input:$input){cursor total transactions{id}}}}}',
+  variables: { personId: 'short-1', portfolioId: 's1', input: { pageSize: 50 } },
+};
+
+function interest(id, timestamp, status) {
+  return { id, type: 'CASH_TRANSACTION', status: status || 'SETTLED', cashTransactionType: 'INTEREST', amount: 2, currency: 'EUR', lastEventDateTime: timestamp };
+}
 const ALL = { broker: true, deposit: true, details: true, from: '', to: '' };
 
 function trade(id, timestamp, status) {
@@ -31,7 +40,7 @@ function cash(id, timestamp) {
 }
 
 function fakeApi(overrides) {
-  const calls = { details: [], deposit: [] };
+  const calls = { details: [], recipes: [], lists: [], depositDetails: [] };
   const api = Object.assign(
     {
       async listBrokerTransactions() {
@@ -41,12 +50,17 @@ function fakeApi(overrides) {
         calls.details.push(args.transactionId);
         return { transactionReference: `ref-${args.transactionId}`, averagePrice: 10, tradeTransactionAmounts: { transactionFee: 0.99, taxAmount: 0 } };
       },
-      async listSavingsAccounts() {
-        return [{ __typename: 'OvernightSavingsAccount', id: 's1' }, { __typename: 'FixedTermSavingsAccount', id: 'f1' }];
+      async getDepositRecipe(savingsAccountId) {
+        calls.recipes.push(savingsAccountId);
+        return Object.assign({}, RECIPE, { variables: Object.assign({}, RECIPE.variables, { portfolioId: savingsAccountId }) });
       },
       async listDepositTransactions(args) {
-        calls.deposit.push(args.savingsAccountId);
-        return { transactions: [{ id: 'd1', type: 'CASH_TRANSACTION', status: 'SETTLED', cashTransactionType: 'INTEREST', amount: 2, currency: 'EUR', lastEventDateTime: '2026-02-28T12:00:00Z' }], complete: true };
+        calls.lists.push([args.savingsAccountId, args.recipe.variables.personId]);
+        return { transactions: [interest('d1', '2026-02-28T12:00:00Z')], total: 1, complete: true };
+      },
+      async getDepositTransactionDetails(args) {
+        calls.depositDetails.push([args.personId, args.savingsAccountId, args.transactionId]);
+        return { id: args.transactionId, isCancellation: false, transactionReference: `ref-${args.transactionId}`, taxDetails: { grossAmount: 2.7, taxAmount: 0.7 } };
       },
     },
     overrides || {},
@@ -64,7 +78,15 @@ test('both accounts are exported, with details only for executed trades', async 
   assert.deepEqual(outcome.errors, []);
   assert.deepEqual(outcome.warnings, []);
   assert.deepEqual(calls.details, ['t3']);
-  assert.deepEqual(calls.deposit, ['s1'], 'only overnight accounts are read');
+  assert.deepEqual(calls.recipes, ['s1'], 'without a known recipe, the account’s page gives one');
+  assert.deepEqual(calls.lists, [['s1', 'short-1']]);
+  assert.deepEqual(calls.depositDetails, [['short-1', 's1', 'd1']], 'interest details use the person id of the recipe');
+  const interest = outcome.deposit[0];
+  assert.equal(interest.lf_details, 'yes');
+  assert.equal(interest.lf_gross_amount, '2.7');
+  assert.equal(interest.lf_tax_amount, '0.7');
+  assert.equal(interest.tax, '0,7');
+  assert.equal(interest.reference, 'ref-d1');
   const byId = Object.fromEntries(outcome.broker.map((row) => [row.lf_id, row]));
   assert.equal(byId.t3.lf_details, 'yes');
   assert.equal(byId.t3.reference, 'ref-t3');
@@ -73,6 +95,7 @@ test('both accounts are exported, with details only for executed trades', async 
   assert.equal(byId.c2.lf_details, 'n/a');
   assert.ok(progress.includes('progressBrokerDetails'));
   assert.ok(progress.includes('progressDeposit'));
+  assert.ok(progress.includes('progressDepositDetails'));
 });
 
 test('the period filters rows and stops paging once a page ends before "from"', async () => {
@@ -90,11 +113,30 @@ test('the period filters rows and stops paging once a page ends before "from"', 
   assert.equal(stopWhen([cash('x', '2026-02-01T10:00:00Z')]), false);
 });
 
-test('without details, executed trades are flagged as not read', async () => {
+test('without details, executed trades and interest are flagged as not read', async () => {
   const { api, calls } = fakeApi();
   const outcome = await exporter.runExport({ api, ids: IDS, options: Object.assign({}, ALL, { details: false }), context: CONTEXT });
   assert.deepEqual(calls.details, []);
+  assert.deepEqual(calls.depositDetails, []);
   assert.equal(outcome.broker.find((row) => row.lf_id === 't3').lf_details, 'no');
+  assert.equal(outcome.deposit[0].lf_details, 'no');
+  assert.equal(outcome.deposit[0].lf_gross_amount, '');
+});
+
+test('a refusal while reading interest details stops the remaining ones', async () => {
+  const { api, calls } = fakeApi({
+    async listDepositTransactions() {
+      return { transactions: [interest('i3', '2026-02-28T12:00:00Z'), interest('i2', '2026-02-27T12:00:00Z'), interest('i1', '2026-02-26T12:00:00Z')], total: 3, complete: true };
+    },
+    async getDepositTransactionDetails(args) {
+      calls.depositDetails.push(args.transactionId);
+      throw new ExportError('denied', 'Unauthorized access');
+    },
+  });
+  const outcome = await exporter.runExport({ api, ids: IDS, options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
+  assert.deepEqual(calls.depositDetails, ['i3']);
+  assert.deepEqual(outcome.deposit.map((row) => row.lf_details), ['error', 'error', 'error']);
+  assert.deepEqual(outcome.warnings, [{ key: 'warnDetails', args: [3] }]);
 });
 
 test('a rate limit while reading details stops further detail requests and warns', async () => {
@@ -117,7 +159,7 @@ test('a rate limit while reading details stops further detail requests and warns
 
 test('a failing account does not lose the other one', async () => {
   const { api } = fakeApi();
-  const outcome = await exporter.runExport({ api, ids: { personId: 'person', portfolioId: null }, options: ALL, context: CONTEXT });
+  const outcome = await exporter.runExport({ api, ids: { personId: 'person', portfolioId: null, savingsAccountIds: ['s1'] }, options: ALL, context: CONTEXT });
   assert.equal(outcome.broker, null);
   assert.equal(outcome.deposit.length, 1);
   assert.equal(outcome.errors.length, 1);
@@ -134,37 +176,81 @@ test('cancellation ends the whole export', async () => {
   await assert.rejects(exporter.runExport({ api, ids: IDS, options: ALL, context: CONTEXT }), (error) => error.code === 'cancelled');
 });
 
-test('the overnight ids found in the page are used when the account list fails', async () => {
+test('a recipe already known from the page or the session is used without downloading the page', async () => {
+  const notes = [];
+  const known = { recipe: Object.assign({}, RECIPE, { variables: Object.assign({}, RECIPE.variables, { personId: 'from-page' }) }), source: 'page' };
+  const { api, calls } = fakeApi();
+  const outcome = await exporter.runExport({
+    api,
+    ids: Object.assign({}, IDS, { depositRecipes: { s1: known } }),
+    options: Object.assign({}, ALL, { broker: false }),
+    context: CONTEXT,
+    diagnostics: (event, data) => notes.push([event, data]),
+  });
+  assert.deepEqual(calls.recipes, []);
+  assert.deepEqual(calls.lists, [['s1', 'from-page']]);
+  assert.equal(outcome.deposit.length, 1);
+  assert.deepEqual(notes, [['overnight-recipe', { source: 'page', operation: 'Transactions' }]]);
+});
+
+test('a known recipe that stops working is replaced by a fresh one, once', async () => {
+  const notes = [];
+  const known = { recipe: Object.assign({}, RECIPE, { variables: Object.assign({}, RECIPE.variables, { personId: 'stale' }) }), source: 'memory' };
   const { api, calls } = fakeApi({
-    async listSavingsAccounts() {
-      throw new ExportError('graphql', 'Cannot query field "savingsAccounts"');
+    async listDepositTransactions(args) {
+      calls.lists.push(args.recipe.variables.personId);
+      if (args.recipe.variables.personId === 'stale') throw new ExportError('denied', 'Unauthorized access');
+      return { transactions: [interest('d1', '2026-02-28T12:00:00Z')], total: 1, complete: true };
     },
   });
   const outcome = await exporter.runExport({
     api,
-    ids: Object.assign({}, IDS, { savingsAccountIds: ['page-1'] }),
-    options: Object.assign({}, ALL, { broker: false }),
+    ids: Object.assign({}, IDS, { depositRecipes: { s1: known } }),
+    options: Object.assign({}, ALL, { broker: false, details: false }),
     context: CONTEXT,
+    diagnostics: (event, data) => notes.push([event, data]),
   });
-  assert.deepEqual(calls.deposit, ['page-1']);
+  assert.deepEqual(calls.lists, ['stale', 'short-1']);
+  assert.deepEqual(calls.recipes, ['s1']);
   assert.equal(outcome.deposit.length, 1);
+  assert.deepEqual(notes.map(([event, data]) => `${event}:${data.source}`), ['overnight-recipe:memory', 'overnight-recipe-retry:memory', 'overnight-recipe:download']);
 });
 
-test('missing overnight accounts and partial reads produce warnings', async () => {
-  let made = fakeApi({
-    async listSavingsAccounts() {
-      return [];
-    },
-  });
-  let outcome = await exporter.runExport({ api: made.api, ids: IDS, options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
-  assert.deepEqual(outcome.warnings, [{ key: 'warnNoDeposit' }]);
-
-  made = fakeApi({
+test('errors that a fresh recipe cannot fix are not retried', async () => {
+  const known = { recipe: RECIPE, source: 'memory' };
+  const { api, calls } = fakeApi({
     async listDepositTransactions() {
-      return { transactions: [{ id: 'd1', lastEventDateTime: '2026-02-28T12:00:00Z' }], complete: false };
+      throw new ExportError('rateLimited', '429');
     },
   });
-  outcome = await exporter.runExport({ api: made.api, ids: IDS, options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
+  const outcome = await exporter.runExport({ api, ids: Object.assign({}, IDS, { depositRecipes: { s1: known } }), options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
+  assert.deepEqual(calls.recipes, []);
+  assert.equal(outcome.errors[0].error.code, 'rateLimited');
+});
+
+test('without an overnight account seen on the pages, the user is asked to open it', async () => {
+  const { api, calls } = fakeApi();
+  const outcome = await exporter.runExport({ api, ids: Object.assign({}, IDS, { savingsAccountIds: [] }), options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
+  assert.equal(outcome.deposit, null);
+  assert.equal(outcome.errors[0].error.code, 'noDepositAccount');
+  assert.deepEqual(calls.recipes, [], 'nothing is requested');
+
+  const blocked = fakeApi({
+    async getDepositRecipe() {
+      throw new ExportError('depositPage', 'redirect');
+    },
+  });
+  const second = await exporter.runExport({ api: blocked.api, ids: IDS, options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
+  assert.equal(second.errors[0].error.code, 'depositPage');
+});
+
+test('a list shorter than its total produces a warning', async () => {
+  const { api } = fakeApi({
+    async listDepositTransactions() {
+      return { transactions: [interest('d1', '2026-02-28T12:00:00Z')], total: 5, complete: false };
+    },
+  });
+  const outcome = await exporter.runExport({ api, ids: IDS, options: Object.assign({}, ALL, { broker: false, details: false }), context: CONTEXT });
   assert.deepEqual(outcome.warnings, [{ key: 'warnDepositPartial', args: [1] }]);
 });
 
@@ -195,8 +281,12 @@ test('summarize keeps kinds, statuses and signs, never amounts or identifiers', 
     quantity: '+',
     fee: '+',
     tax: '0',
+    gross: '',
     details: 'yes',
     count: 1,
   });
+  const interest = summary.find((entry) => entry.account === 'deposit');
+  assert.equal(interest.gross, '+');
+  assert.equal(interest.tax, '+');
   assert.equal(summary.reduce((total, entry) => total + entry.count, 0), 4);
 });

@@ -97,19 +97,35 @@
     return Array.from(ids);
   }
 
+  // env.remembered: { personId, portfolioId, savingsAccountIds } seen earlier in this
+  // browser session, used for what the current page does not show.
   function discover(env) {
     const person = findPersonId(env);
-    const portfolio = findPortfolioId(env);
+    const remembered = person && env.remembered && env.remembered.personId === person.value ? env.remembered : null;
+
+    let portfolio = findPortfolioId(env);
+    if (!portfolio && remembered && ID_ONLY.test(remembered.portfolioId || '')) {
+      portfolio = { value: remembered.portfolioId, source: 'remembered' };
+    }
+
+    let savingsAccountIds = findSavingsAccountIds(env);
+    let savingsSource = savingsAccountIds.length > 0 ? 'page' : null;
+    if (savingsAccountIds.length === 0 && remembered && Array.isArray(remembered.savingsAccountIds)) {
+      savingsAccountIds = remembered.savingsAccountIds.filter((id) => typeof id === 'string' && ID_ONLY.test(id));
+      savingsSource = savingsAccountIds.length > 0 ? 'remembered' : null;
+    }
+
     return {
       personId: person ? person.value : null,
       personSource: person ? person.source : null,
       portfolioId: portfolio ? portfolio.value : null,
       portfolioSource: portfolio ? portfolio.source : null,
-      savingsAccountIds: findSavingsAccountIds(env),
+      savingsAccountIds,
+      savingsSource,
     };
   }
 
-  const api = { findPersonId, findPortfolioId, findSavingsAccountIds, discover };
+  const api = { ID_ONLY, findPersonId, findPortfolioId, findSavingsAccountIds, discover };
 
   root.LFX = root.LFX || {};
   root.LFX.scalable = root.LFX.scalable || {};

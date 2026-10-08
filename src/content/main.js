@@ -10,13 +10,28 @@
   LFX.started = true;
 
   const INFO_URL = 'https://github.com/Librefolio/librefolio-exporter#risks';
-  const APP_PATH = /^\/(broker|interest|cockpit)(\/|$)/;
+  const APP_PATH = /^\/(broker|interest|cockpit|savings|account)(\/|$)/;
+  const TRANSACTIONS_PAGE = /^\/interest\/overnight\/([^/]+)\/transactions\/?$/;
   const EXPORTER_ID = 'librefolio-exporter';
-  const DEFAULT_SETTINGS = { riskAccepted: false, lastExportDate: '', updateCheckEnabled: true };
+  const DEFAULT_SETTINGS = {
+    riskAccepted: false,
+    lastExportDates: {},
+    lastExportDate: '',
+    filePrefix: LFX.files.DEFAULT_PREFIX,
+    formDraft: null,
+    // Not in the panel: automated tests turn Chrome's "Save as" window off.
+    saveDialog: true,
+  };
+  const ACCOUNTS = ['broker', 'deposit'];
+  // Progress steps that report (done, total): the bar can show how far they are.
+  const COUNTED_STEPS = new Set(['progressDeposit', 'progressBrokerDetails', 'progressDepositDetails']);
   const ERROR_KEYS = {
     noPerson: 'errorNoPerson',
     noPortfolio: 'errorNoPortfolio',
+    noDepositAccount: 'errorNoDepositAccount',
+    depositPage: 'errorDepositPage',
     session: 'errorSession',
+    denied: 'errorDenied',
     rateLimited: 'errorRateLimited',
     unexpected: 'errorUnexpected',
     graphql: 'errorUnexpected',
@@ -24,18 +39,24 @@
     network: 'errorNetwork',
   };
   // Errors whose technical detail helps a bug report: it never contains personal data.
-  const SHOW_TECHNICAL = new Set(['unexpected', 'graphql', 'http', 'network']);
+  const SHOW_TECHNICAL = new Set(['unexpected', 'graphql', 'http', 'network', 'denied', 'depositPage']);
 
   const version = chrome.runtime.getManifest().version;
   const t = LFX.i18n.translator(LFX.i18n.pickLanguage([document.documentElement.lang, navigator.language]));
 
   let ui = null;
   let controller = null;
+  let defaultsApplied = false;
+  let lastRemembered = '';
+  let updateRequest = 0;
+  let recipePath = null;
+  let recipeOfPage = null;
 
-  // Diagnostics in the page console: operations, statuses and sources, never
-  // identifiers, amounts or descriptions.
+  // Diagnostics in the page console, as plain text: operations, statuses and sources,
+  // never identifiers, amounts or descriptions.
   function log(event, data) {
-    console.info('[LibreFolio Exporter]', event, data === undefined ? '' : data);
+    if (data === undefined) console.info('[LibreFolio Exporter]', event);
+    else console.info('[LibreFolio Exporter]', event, JSON.stringify(data));
   }
 
   function errorText(error) {
@@ -50,11 +71,23 @@
   }
 
   async function loadSettings() {
+    let settings;
     try {
-      return await chrome.storage.local.get(DEFAULT_SETTINGS);
+      settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
     } catch (error) {
-      return Object.assign({}, DEFAULT_SETTINGS);
+      settings = Object.assign({}, DEFAULT_SETTINGS);
     }
+    const dates = settings.lastExportDates && typeof settings.lastExportDates === 'object' ? Object.assign({}, settings.lastExportDates) : {};
+    // Before one date per account, a single date covered both.
+    if (Object.keys(dates).length === 0 && settings.lastExportDate) for (const account of ACCOUNTS) dates[account] = settings.lastExportDate;
+    settings.lastExportDates = dates;
+    return settings;
+  }
+
+  // The oldest last export of the given accounts; '' when one of them was never exported.
+  function sinceLast(dates, accounts) {
+    const found = accounts.map((account) => dates[account] || '');
+    return found.length > 0 && found.every(Boolean) ? found.sort()[0] : '';
   }
 
   async function saveSettings(values) {
@@ -62,6 +95,15 @@
       await chrome.storage.local.set(values);
     } catch (error) {
       // The extension was reloaded or removed: nothing left to save to.
+    }
+  }
+
+  // Message to the background service worker; null when it cannot answer.
+  async function message(payload) {
+    try {
+      return await chrome.runtime.sendMessage(payload);
+    } catch (error) {
+      return null;
     }
   }
 
@@ -73,7 +115,80 @@
     }
   }
 
-  function download(filename, content) {
+  function pageEnv(extra) {
+    return Object.assign(
+      { location: root.location, sessionStorage: webStorage('sessionStorage'), localStorage: webStorage('localStorage'), document },
+      extra || {},
+    );
+  }
+
+  function personInTab() {
+    return LFX.scalable.discovery.findPersonId({ sessionStorage: webStorage('sessionStorage'), localStorage: webStorage('localStorage'), document: null });
+  }
+
+  // A web-app page: a known path, or any page where the app keeps the person id in the tab.
+  function isAppPage() {
+    return APP_PATH.test(root.location.pathname) || Boolean(personInTab());
+  }
+
+  // On an overnight account's Transactions page, the recipe of its transaction list,
+  // read from the page's own data (once per page address).
+  function pageDepositRecipe() {
+    const path = root.location.pathname;
+    if (path !== recipePath) {
+      recipePath = path;
+      recipeOfPage = null;
+      const match = TRANSACTIONS_PAGE.exec(path);
+      if (match) {
+        const savingsAccountId = decodeURIComponent(match[1]);
+        const flight = LFX.scalable.flight;
+        const recipe = flight.findDepositRecipe(flight.textFromDocument(document));
+        if (flight.isUsableDepositRecipe(recipe, savingsAccountId)) recipeOfPage = { savingsAccountId, recipe };
+      }
+    }
+    return recipeOfPage;
+  }
+
+  // The broker's pages show the portfolio, the overnight pages show their account and,
+  // on the Transactions page, the recipe of its list: the background keeps them, so
+  // each account can be exported from any page.
+  function rememberIdsFromPage() {
+    const person = personInTab();
+    if (!person) return;
+    const env = { location: root.location, document };
+    const portfolio = LFX.scalable.discovery.findPortfolioId(env);
+    const savingsAccountIds = LFX.scalable.discovery.findSavingsAccountIds(env);
+    const fromPage = pageDepositRecipe();
+    if (!portfolio && savingsAccountIds.length === 0 && !fromPage) return;
+    const depositRecipe = fromPage ? Object.assign({ savingsAccountId: fromPage.savingsAccountId }, fromPage.recipe) : null;
+    const key = JSON.stringify([person.value, portfolio && portfolio.value, savingsAccountIds, depositRecipe]);
+    if (key === lastRemembered) return;
+    lastRemembered = key;
+    message({
+      type: 'lfx:remember-ids',
+      personId: person.value,
+      portfolioId: portfolio ? portfolio.value : null,
+      savingsAccountIds,
+      depositRecipe,
+    });
+  }
+
+  // Recipes of the overnight accounts' lists: this page's first, then those remembered
+  // for the same person.
+  function depositRecipes(remembered, ids) {
+    const recipes = {};
+    const flight = LFX.scalable.flight;
+    if (remembered && ids.personId && remembered.personId === ids.personId && remembered.depositRecipes) {
+      for (const [savingsAccountId, recipe] of Object.entries(remembered.depositRecipes)) {
+        if (flight.isUsableDepositRecipe(recipe, savingsAccountId)) recipes[savingsAccountId] = { recipe, source: 'memory' };
+      }
+    }
+    const fromPage = pageDepositRecipe();
+    if (fromPage) recipes[fromPage.savingsAccountId] = { recipe: fromPage.recipe, source: 'page' };
+    return recipes;
+  }
+
+  function anchorDownload(filename, content) {
     const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -85,39 +200,66 @@
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
 
-  async function refreshUpdateNotice(settings) {
-    if (!settings.updateCheckEnabled) {
-      ui.setUpdate(null);
-      return;
+  // Through the extension (chosen folder, or Chrome's window); from the page, into
+  // Downloads, when a file is too large for that or the extension does not answer.
+  // Through the extension, with Chrome's window to choose the folder; from the page, into
+  // Downloads, when a file is too large for that or the extension does not answer.
+  async function saveFiles(files, settings) {
+    if (files.every((file) => LFX.files.fitsDataUrl(file.content))) {
+      const answer = await message({ type: 'lfx:download', files, folder: '', saveAs: settings.saveDialog !== false });
+      if (answer && answer.ok) return { ok: true, via: 'downloads' };
+      if (answer && answer.error) return { ok: false, error: answer.error };
+      log('download-fallback', { reason: 'no answer from the extension' });
+    } else {
+      log('download-fallback', { reason: 'file too large for the extension' });
     }
-    try {
-      ui.setUpdate(await chrome.runtime.sendMessage({ type: 'lfx:update-status' }));
-    } catch (error) {
-      ui.setUpdate(null);
-    }
+    for (const file of files) anchorDownload(file.name, file.content);
+    return { ok: true, via: 'anchor' };
+  }
+
+  function savedText(saved, settings) {
+    return saved.via === 'downloads' && settings.saveDialog !== false ? t('savedAsked') : t('savedIn', t('downloadsName'));
+  }
+
+  // force: ask GitHub now; otherwise the background answers from its daily cache.
+  async function checkUpdates(force) {
+    const request = ++updateRequest;
+    ui.setUpdate({ status: 'checking' });
+    const answer = await message({ type: 'lfx:update-status', force: force === true });
+    if (request !== updateRequest) return;
+    if (!answer || answer.ok === false) ui.setUpdate({ status: 'failed' });
+    else ui.setUpdate({ status: answer.available ? 'available' : 'current', latest: answer.latest, url: answer.url });
   }
 
   async function onOpen() {
     const settings = await loadSettings();
     ui.setRiskAccepted(settings.riskAccepted === true);
-    ui.setUpdateCheck(settings.updateCheckEnabled !== false);
-    ui.setLastExport(settings.lastExportDate || '');
-    if (!ui.isBusy()) ui.setDefaults({ from: settings.lastExportDate || '', to: '' });
-    refreshUpdateNotice(settings);
+    ui.setLastExport(settings.lastExportDates);
+    ui.setSaveSettings(settings);
+    const today = LFX.format.todayBerlin();
+    if (!defaultsApplied && !ui.isBusy()) {
+      const draft = settings.formDraft;
+      // The form survives page changes for the day; afterwards it starts from the last export.
+      if (draft && typeof draft === 'object' && draft.day === today) ui.setDefaults(draft);
+      else ui.setDefaults({ from: sinceLast(settings.lastExportDates, ACCOUNTS), to: today, broker: true, deposit: true });
+      defaultsApplied = true;
+    }
+    ui.fillEmptyTo(today);
+    checkUpdates(false);
+  }
+
+  async function onFormChange(values) {
+    await saveSettings({ formDraft: Object.assign({}, values, { day: LFX.format.todayBerlin() }) });
   }
 
   async function onAcceptRisk() {
     await saveSettings({ riskAccepted: true });
   }
 
-  async function onToggleUpdateCheck(enabled) {
-    await saveSettings({ updateCheckEnabled: enabled });
-    try {
-      await chrome.storage.local.remove('updateCache');
-    } catch (error) {
-      // Ignored: the cache only avoids repeated checks.
-    }
-    refreshUpdateNotice({ updateCheckEnabled: enabled });
+  async function onSaveSettings(values) {
+    const cleaned = { filePrefix: LFX.files.sanitizePrefix(values.filePrefix) };
+    await saveSettings(cleaned);
+    return cleaned;
   }
 
   function onCancel() {
@@ -139,17 +281,21 @@
     ui.setBusy(true);
     ui.setWarnings([]);
     ui.setStatus('');
+    // One collapsed group per export keeps the page's console readable.
+    console.groupCollapsed(`[LibreFolio Exporter] ${t('exporting')} ${new Date().toLocaleTimeString()}`);
     try {
-      const ids = scalable.discovery.discover({
-        location: root.location,
-        sessionStorage: webStorage('sessionStorage'),
-        localStorage: webStorage('localStorage'),
-        document,
-      });
+      const settings = await loadSettings();
+      rememberIdsFromPage();
+      const person = personInTab();
+      const remembered = person ? await message({ type: 'lfx:recall-ids', personId: person.value }) : null;
+      const ids = scalable.discovery.discover(pageEnv({ remembered }));
+      ids.depositRecipes = depositRecipes(remembered, ids);
       log('identifiers', {
         person: ids.personSource || 'not found',
         portfolio: ids.portfolioSource || 'not found',
-        overnightLinks: ids.savingsAccountIds.length,
+        overnight: ids.savingsSource || 'not found',
+        overnightAccounts: ids.savingsAccountIds.length,
+        overnightRecipes: Object.values(ids.depositRecipes).map((entry) => entry.source),
       });
       const api = scalable.client.createClient({
         fetchImpl: (url, init) => fetch(url, init),
@@ -162,25 +308,23 @@
         ids,
         options,
         context: { exporter: `${EXPORTER_ID}/${version}` },
-        progress: (key, ...args) => ui.setStatus(t(key, ...args)),
+        progress: (key, ...args) => {
+          log(t(key, ...args));
+          ui.setProgress(COUNTED_STEPS.has(key) && args[1] > 0 ? args[0] / args[1] : null);
+        },
+        diagnostics: log,
       });
 
       const allRows = [].concat(outcome.broker || [], outcome.deposit || []);
       if (allRows.length > 0) {
-        log('structure of the export (no amounts, descriptions or identifiers)');
-        console.table(scalable.exporter.summarize(allRows));
+        const structure = scalable.exporter.summarize(allRows);
+        log('structure of the export (no amounts, descriptions or identifiers)', structure);
       }
 
-      const stamp = LFX.format.fileTimestamp();
-      let files = 0;
-      if (outcome.broker && outcome.broker.length > 0) {
-        download(`scalable-broker_${stamp}.csv`, scalable.exporter.toCsv(outcome.broker));
-        files++;
-      }
-      if (outcome.deposit && outcome.deposit.length > 0) {
-        download(`scalable-deposit_${stamp}.csv`, scalable.exporter.toCsv(outcome.deposit));
-        files++;
-      }
+      const names = LFX.files.fileNames(settings.filePrefix, LFX.format.fileTimestamp());
+      const files = [];
+      if (outcome.broker && outcome.broker.length > 0) files.push({ name: names.broker, content: scalable.exporter.toCsv(outcome.broker) });
+      if (outcome.deposit && outcome.deposit.length > 0) files.push({ name: names.deposit, content: scalable.exporter.toCsv(outcome.deposit) });
 
       const messages = outcome.warnings.map((warning) => t(warning.key, ...(warning.args || [])));
       for (const failure of outcome.errors) {
@@ -190,39 +334,67 @@
       }
       ui.setWarnings(messages);
 
-      if (files === 0 && outcome.errors.length > 0) {
+      if (files.length === 0 && outcome.errors.length > 0) {
         ui.setStatus(errorText(outcome.errors[0].error), 'error');
-      } else if (files === 0) {
-        ui.setStatus(t('nothingToExport'));
-      } else {
-        ui.setStatus(t('done', (outcome.broker || []).length, (outcome.deposit || []).length), 'success');
-        if (outcome.errors.length === 0) {
-          const exportedUntil = options.to || LFX.format.todayBerlin();
-          await saveSettings({ lastExportDate: exportedUntil });
-          ui.setLastExport(exportedUntil);
-        }
+        return;
       }
+      if (files.length > 0) {
+        const saved = await saveFiles(files, settings);
+        if (!saved.ok) {
+          log('save-error', { error: saved.error });
+          ui.setStatus(t('saveFailed', saved.error), 'error');
+          return;
+        }
+        ui.setStatus(`${t('done', (outcome.broker || []).length, (outcome.deposit || []).length)} ${savedText(saved, settings)}`, 'success');
+      } else {
+        ui.setStatus(t('nothingToExport'));
+      }
+      // Each account read without errors is up to date until "to".
+      const exportedUntil = options.to || LFX.format.todayBerlin();
+      const dates = Object.assign({}, settings.lastExportDates);
+      for (const account of ACCOUNTS) if (Array.isArray(outcome[account])) dates[account] = exportedUntil;
+      await saveSettings({ lastExportDates: dates });
+      ui.setLastExport(dates);
     } catch (error) {
       const cancelled = error && error.code === 'cancelled';
-      log(cancelled ? 'cancelled' : 'error', cancelled ? undefined : { code: error && error.code, detail: error && (error.detail || error.message) });
+      if (cancelled) log('cancelled');
+      else log('error', { code: error && error.code, detail: error && (error.detail || error.message) });
       ui.setStatus(cancelled ? t('cancelled') : errorText(error), cancelled ? '' : 'error');
       if (!cancelled) ui.setWarnings(technicalLines(error));
     } finally {
       controller = null;
       ui.setBusy(false);
+      console.groupEnd();
     }
   }
 
   function ensureUi() {
     if (!ui) {
-      ui = LFX.ui.create({ t, version, infoUrl: INFO_URL, onOpen, onExport, onCancel, onAcceptRisk, onToggleUpdateCheck });
+      ui = LFX.ui.create({
+        t,
+        version,
+        infoUrl: INFO_URL,
+        logoUrl: LFX.logoDataUrl,
+        today: () => LFX.format.todayBerlin(),
+        shiftMonths: LFX.format.shiftMonths,
+        fileNames: (prefix) => LFX.files.fileNames(prefix, LFX.format.fileTimestamp()),
+        onOpen,
+        onExport,
+        onCancel,
+        onAcceptRisk,
+        onCheckUpdates: () => checkUpdates(true),
+        onSaveSettings,
+        onFormChange,
+        onLogoError: () => log('logo blocked by the page'),
+      });
     }
     return ui;
   }
 
   // The web app is a single-page application: follow its route changes.
   function syncRoute() {
-    if (APP_PATH.test(root.location.pathname)) ensureUi().show();
+    rememberIdsFromPage();
+    if (isAppPage()) ensureUi().show();
     else if (ui && !ui.isBusy()) ui.hide();
   }
 

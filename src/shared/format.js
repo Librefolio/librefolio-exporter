@@ -126,6 +126,17 @@
     return berlinDateTime(now || new Date()).date;
   }
 
+  // "2026-03-31" shifted by -1 month is "2026-02-28": the day is clamped to the month.
+  function shiftMonths(date, months) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date || '');
+    if (!match) return '';
+    const monthIndex = Number(match[2]) - 1 + months;
+    const year = Number(match[1]) + Math.floor(monthIndex / 12);
+    const month = ((monthIndex % 12) + 12) % 12;
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(year, month, Math.min(Number(match[3]), lastDay))).toISOString().slice(0, 10);
+  }
+
   function pad(number) {
     return String(number).padStart(2, '0');
   }
@@ -142,6 +153,7 @@
     sumDecimals,
     berlinDateTime,
     todayBerlin,
+    shiftMonths,
     fileTimestamp,
   };
 

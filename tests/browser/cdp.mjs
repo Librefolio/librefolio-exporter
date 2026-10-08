@@ -8,8 +8,13 @@ export async function connect(port) {
   });
   let nextId = 0;
   const pending = new Map();
+  const listeners = new Map();
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data);
+    if (message.method) {
+      for (const listener of listeners.get(message.method) || []) listener(message.params, message.sessionId);
+      return;
+    }
     if (!message.id || !pending.has(message.id)) return;
     const { resolve, reject } = pending.get(message.id);
     pending.delete(message.id);
@@ -21,6 +26,10 @@ export async function connect(port) {
       const id = ++nextId;
       ws.send(JSON.stringify({ id, method, params, sessionId }));
       return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    },
+    on(method, listener) {
+      if (!listeners.has(method)) listeners.set(method, []);
+      listeners.get(method).push(listener);
     },
     close() {
       ws.close();
