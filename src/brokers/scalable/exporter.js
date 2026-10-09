@@ -235,16 +235,14 @@
     for (const row of rows) {
       const entry = {
         account: row.lf_account,
-        kind: row.lf_kind,
-        subtype: row.lf_subtype,
-        side: row.lf_side,
-        status: row.lf_status,
+        assetType: row.assetType,
         type: row.type,
-        amount: sign(row.lf_amount),
-        quantity: sign(row.lf_quantity),
-        fee: sign(row.lf_transaction_fee),
-        tax: sign(row.lf_tax_amount),
-        gross: sign(row.lf_gross_amount),
+        subtype: row.lf_subtype,
+        status: row.lf_status,
+        amount: sign(row.amount),
+        shares: sign(row.shares),
+        fee: sign(row.fee),
+        tax: sign(row.tax),
         details: row.lf_details,
       };
       const key = JSON.stringify(entry);

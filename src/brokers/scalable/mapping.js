@@ -3,8 +3,8 @@
  *
  * The first 14 columns follow the official Scalable CSV export (PRIME), so tools
  * that read it can read these files too; their labels are a best-effort mapping.
- * The lf_* columns carry, verbatim, every field that the queries return, and are the
- * source of truth for LibreFolio. See docs/FORMAT.md.
+ * The lf_* columns carry, verbatim, what the Prime columns do not: every field that the
+ * queries return is written once. See docs/FORMAT.md.
  */
 (function (root) {
   'use strict';
@@ -34,63 +34,51 @@
   // Columns closing every row, after the fields.
   const CLOSING_COLUMNS = ['lf_details', 'lf_exporter', 'lf_format'].map((name) => ({ name }));
 
-  // Every field that the queries return, from the list and from the details, is written as
-  // an lf_* column: GraphQL answers only the fields a query asks for, so the queries decide
-  // the content (queries.js for the broker; the web app's own for the overnight account).
-  // The fields known so far keep a short name and a fixed place, listed here; any other
-  // field is named after its path (numberOfShares.total → lf_number_of_shares_total) and
-  // placed before the closing columns.
-  const FIELD_COLUMNS = [
-    ['id', 'lf_id'],
-    ['type', 'lf_kind'],
-    ['securityTransactionType', 'lf_subtype'],
-    ['cashTransactionType', 'lf_subtype'],
-    ['nonTradeSecurityTransactionType', 'lf_subtype'],
-    ['side', 'lf_side'],
-    ['status', 'lf_status'],
-    ['isCancellation', 'lf_is_cancellation'],
-    ['isPending', 'lf_is_pending'],
-    ['lastEventDateTime', 'lf_timestamp_utc'],
-    ['description', 'lf_description'],
-    ['isin', 'lf_isin'],
-    ['relatedIsin', 'lf_related_isin'],
-    ['currency', 'lf_currency'],
-    ['amount', 'lf_amount'],
-    ['quantity', 'lf_quantity'],
-    ['eltifQuantity', 'lf_quantity'],
-    ['averagePrice', 'lf_price'],
-    ['numberOfShares.filled', 'lf_filled_shares'],
-    ['numberOfShares.total', 'lf_total_shares'],
-    ['totalAmount', 'lf_total_amount'],
-    ['tradeTransactionAmounts.marketValuation', 'lf_market_valuation'],
-    ['tradeTransactionAmounts.transactionFee', 'lf_transaction_fee'],
-    ['tradeTransactionAmounts.venueFee', 'lf_venue_fee'],
-    ['tradeTransactionAmounts.cryptoSpreadFee', 'lf_crypto_spread_fee'],
-    ['tradeTransactionAmounts.taxAmount', 'lf_tax_amount'],
-    ['taxDetails.taxAmount', 'lf_tax_amount'],
-    ['taxDetails.grossAmount', 'lf_gross_amount'],
-    ['fee', 'lf_fee'],
-    ['transactionalFee', 'lf_transactional_fee'],
-    ['taxes', 'lf_taxes'],
-    ['tradingVenue', 'lf_trading_venue'],
-    ['transactionReference', 'lf_transaction_reference'],
-    ['transactionHistory', 'lf_transaction_history'],
-  ];
-  const FIELD_COLUMN = new Map(FIELD_COLUMNS);
-
-  // The only field left out: GraphQL's own name of each type, at any depth, which names
-  // the shape of the answer rather than the transaction. Everything else that a query
-  // returns is written.
-  const EXCLUDED_FIELDS = {
-    __typename: 'GraphQL type name, internal to the web app',
+  // Where each field of the web app goes, so that none is written twice: in the lf_*
+  // column named here (`column`); only in the Prime column that already carries it
+  // (`prime`); or nowhere, because it repeats another field (`none`). GraphQL's
+  // __typename names types, not data, and is never written. A field missing here can only
+  // come from a query of the web app that Scalable has changed: it is written as a new
+  // column named after its path (numberOfShares.total → lf_number_of_shares_total).
+  const FIELDS = {
+    id: { column: 'lf_id' },
+    securityTransactionType: { column: 'lf_subtype' },
+    cashTransactionType: { column: 'lf_subtype' },
+    nonTradeSecurityTransactionType: { column: 'lf_subtype' },
+    status: { column: 'lf_status' },
+    isCancellation: { column: 'lf_is_cancellation' },
+    'numberOfShares.total': { column: 'lf_ordered_shares', when: 'not all were executed' },
+    'tradeTransactionAmounts.transactionFee': { column: 'lf_transaction_fee' },
+    'tradeTransactionAmounts.venueFee': { column: 'lf_venue_fee' },
+    'tradeTransactionAmounts.cryptoSpreadFee': { column: 'lf_crypto_spread_fee' },
+    tradingVenue: { column: 'lf_trading_venue' },
+    transactionHistory: { column: 'lf_transaction_history' },
+    lastEventDateTime: { prime: 'date, time' },
+    transactionReference: { prime: 'reference' },
+    description: { prime: 'description' },
+    type: { prime: 'assetType, type' },
+    side: { prime: 'type' },
+    isin: { prime: 'isin' },
+    relatedIsin: { prime: 'isin' },
+    quantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed' },
+    eltifQuantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed' },
+    'numberOfShares.filled': { prime: 'shares' },
+    averagePrice: { prime: 'price' },
+    amount: { prime: 'amount' },
+    'tradeTransactionAmounts.taxAmount': { prime: 'tax' },
+    'taxDetails.taxAmount': { prime: 'tax' },
+    currency: { prime: 'currency' },
+    isPending: { none: 'repeats the status' },
+    'taxDetails.grossAmount': { none: 'equals amount + tax' },
   };
 
-  function isExcluded(path) {
-    return path === '__typename' || path.endsWith('.__typename');
+  function knownField(path) {
+    return Object.prototype.hasOwnProperty.call(FIELDS, path) ? FIELDS[path] : null;
   }
 
   function columnOf(path) {
-    if (FIELD_COLUMN.has(path)) return FIELD_COLUMN.get(path);
+    const known = knownField(path);
+    if (known) return known.column || null;
     const words = path.replace(/\./g, '_').replace(/([a-z0-9])([A-Z])/g, '$1_$2');
     return `lf_${words.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
   }
@@ -154,12 +142,14 @@
     return masked;
   }
 
-  // Writes the fields into the row: fixed columns in place, new fields as new columns.
+  // Writes the fields that have an lf_* column: known ones in place, new ones as new columns.
+  // A field written only under a condition (`when`) is left to the mapping functions.
   function writeFields(row, fields, context) {
     for (const path of Object.keys(fields)) {
-      if (isExcluded(path)) continue;
+      if (path === '__typename' || path.endsWith('.__typename')) continue;
+      if ((knownField(path) || {}).when) continue;
       const column = columnOf(path);
-      if (!row[column]) row[column] = maskIds(fieldText(fields[path]), context);
+      if (column && !row[column]) row[column] = maskIds(fieldText(fields[path]), context);
     }
   }
 
@@ -185,7 +175,7 @@
 
   // The fixed lf_* columns: the account, the known fields in order, the closing columns.
   const LF_COLUMNS = ACCOUNT_COLUMNS.concat(
-    Array.from(new Set(FIELD_COLUMNS.map(([, name]) => name))).map((name) => ({ name })),
+    Array.from(new Set(Object.values(FIELDS).map((field) => field.column).filter(Boolean))).map((name) => ({ name })),
     CLOSING_COLUMNS,
   );
 
@@ -285,8 +275,11 @@
     const when = format.berlinDateTime(summary.lastEventDateTime);
     const rawQuantity = summary.quantity !== undefined && summary.quantity !== null ? summary.quantity : summary.eltifQuantity;
     const filled = details && details.numberOfShares ? details.numberOfShares.filled : undefined;
+    const total = details && details.numberOfShares ? details.numberOfShares.total : undefined;
     // Like the official export: the shares executed, so none for an order that never was.
     const shares = NOT_EXECUTED.has(summary.status) ? '0' : format.toPlainString(filled !== undefined && filled !== null ? filled : rawQuantity);
+    // The shares ordered, only when they differ from the shares executed.
+    const ordered = format.toPlainString(total !== undefined && total !== null ? total : rawQuantity);
     const price = format.toPlainString(details && details.averagePrice);
     // Read details without a fee or a tax mean none, like the official export's 0; without
     // the details, fee and tax stay empty: unknown.
@@ -299,7 +292,7 @@
       date: when.date,
       time: when.time,
       status: primeStatus(summary.status),
-      reference: maskIds((details && details.transactionReference) || summary.id || '', context),
+      reference: maskIds((details && details.transactionReference) || '', context),
       description: maskIds(summary.description || '', context),
       assetType: classify(summary) === 'cash' ? 'Cash' : 'Security',
       type: primeType(summary),
@@ -312,6 +305,7 @@
       currency: summary.currency || '',
       lf_account: 'broker',
       lf_account_index: '1',
+      lf_ordered_shares: ordered && ordered !== shares ? ordered : '',
       lf_details: (detailsResult && detailsResult.status) || 'n/a',
     });
     writeFields(row, fields, context);
@@ -333,7 +327,7 @@
       date: when.date,
       time: when.time,
       status: primeStatus(transaction.status),
-      reference: maskIds((details && details.transactionReference) || transaction.id || '', context),
+      reference: maskIds((details && details.transactionReference) || '', context),
       description: maskIds(transaction.description || '', context),
       assetType: 'Cash',
       type: CASH_TO_PRIME[subtype] || subtype || transaction.type || '',
@@ -354,8 +348,7 @@
     LF_COLUMNS,
     COLUMNS,
     CLOSING_COLUMNS,
-    FIELD_COLUMNS,
-    EXCLUDED_FIELDS,
+    FIELDS,
     columnsFor,
     extraColumns,
     maskIds,

@@ -83,8 +83,6 @@ test('both accounts are exported, with details only for executed trades', async 
   assert.deepEqual(calls.depositDetails, [['short-1', 's1', 'd1']], 'interest details use the person id of the recipe');
   const interest = outcome.deposit[0];
   assert.equal(interest.lf_details, 'yes');
-  assert.equal(interest.lf_gross_amount, '2.7');
-  assert.equal(interest.lf_tax_amount, '0.7');
   assert.equal(interest.tax, '0,7');
   assert.equal(interest.reference, 'ref-d1');
   const byId = Object.fromEntries(outcome.broker.map((row) => [row.lf_id, row]));
@@ -120,7 +118,8 @@ test('without details, executed trades and interest are flagged as not read', as
   assert.deepEqual(calls.depositDetails, []);
   assert.equal(outcome.broker.find((row) => row.lf_id === 't3').lf_details, 'no');
   assert.equal(outcome.deposit[0].lf_details, 'no');
-  assert.equal(outcome.deposit[0].lf_gross_amount, '');
+  assert.equal(outcome.deposit[0].tax, '', 'unknown without the details');
+  assert.equal(outcome.deposit[0].reference, '');
 });
 
 test('a refusal while reading interest details stops the remaining ones', async () => {
@@ -263,31 +262,29 @@ test('toCsv writes the full header in column order', () => {
   assert.equal(text, mapping.COLUMNS.map((column) => column.name).join(';') + '\n');
 });
 
-test('summarize keeps kinds, statuses and signs, never amounts or identifiers', async () => {
+test('summarize keeps types, statuses and signs, never amounts or identifiers', async () => {
   const { api } = fakeApi();
   const outcome = await exporter.runExport({ api, ids: IDS, options: ALL, context: CONTEXT });
   const summary = exporter.summarize([].concat(outcome.broker, outcome.deposit));
   const text = JSON.stringify(summary);
   for (const secret of ['t3', 'c2', 'd1', 'IE0000000001', '-10', '100']) assert.ok(!text.includes(`"${secret}"`), secret);
-  const buy = summary.find((entry) => entry.kind === 'SECURITY_TRANSACTION' && entry.status === 'SETTLED');
+  const buy = summary.find((entry) => entry.assetType === 'Security' && entry.status === 'SETTLED');
   assert.deepEqual(buy, {
     account: 'broker',
-    kind: 'SECURITY_TRANSACTION',
-    subtype: 'SINGLE',
-    side: 'BUY',
-    status: 'SETTLED',
+    assetType: 'Security',
     type: 'Buy',
+    subtype: 'SINGLE',
+    status: 'SETTLED',
     amount: '-',
-    quantity: '+',
+    shares: '+',
     fee: '+',
     tax: '0',
-    gross: '',
     details: 'yes',
     count: 1,
   });
   const interest = summary.find((entry) => entry.account === 'deposit');
-  assert.equal(interest.gross, '+');
   assert.equal(interest.tax, '+');
+  assert.equal(interest.shares, '');
   assert.equal(summary.reduce((total, entry) => total + entry.count, 0), 4);
 });
 

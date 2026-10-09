@@ -661,8 +661,7 @@ test('the content scripts export both accounts end to end', async () => {
   const deposit = depositFile.text.trimEnd().split('\n');
   assert.equal(deposit.length, 3);
   assert.ok(deposit[1].startsWith('2026-10-01;01:00:00;Executed;"RI-1";"Interest";Cash;Interest;;;;1,23;;0,44;EUR;deposit;1;d1;'), deposit[1]);
-  assert.ok(deposit[1].includes(';0.44;1.67;'), 'tax and gross amount of the interest');
-  assert.ok(deposit[2].startsWith('2026-09-29;12:00:00;Executed;"d2";"Withdrawal";Cash;Withdrawal;;;;-2,5;;;EUR;deposit;1;d2;'), deposit[2]);
+  assert.ok(deposit[2].startsWith('2026-09-29;12:00:00;Executed;"";"Withdrawal";Cash;Withdrawal;;;;-2,5;;;EUR;deposit;1;d2;'), deposit[2]);
 
   assert.deepEqual(plain(page.stored.lastExportDates), { broker: format.todayBerlin(), deposit: format.todayBerlin() });
   assert.equal(find('lfx-last-export').hidden, false);

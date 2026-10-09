@@ -87,7 +87,7 @@ elsewhere) and filter on `LibreFolio Exporter`. Each export is one collapsed gro
 it to see the details. It lists where the identifiers were found (not the identifiers),
 where the query of the overnight account's list came from (the page, the session memory
 or a download of the page), every request (operation, path, HTTP status, duration), how
-each file was saved and, at the end, the structure of the export: kinds, statuses, signs
+each file was saved and, at the end, the structure of the export: types, statuses, signs
 and counts. When a response carries a field this version does not know yet, `new-fields`
 lists its name: it is already in the CSV, as a column of its own. It never prints
 identifiers, amounts, descriptions or folders, so you can paste it into an issue.

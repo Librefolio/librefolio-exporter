@@ -22,9 +22,10 @@ First preview, installed by hand.
 - Both accounts exported from any page: the portfolio, the overnight account and the
   query of its list seen on the pages are remembered until the browser closes.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
-  with the original values ([format version 1](docs/FORMAT.md)): every field that the
-  queries return; on the overnight account, whose queries are the web app's own, a field
-  Scalable adds arrives as a new column.
+  ([format version 1](docs/FORMAT.md)): every field that the queries return is written
+  once, in its official column or, when none carries it, in an `lf_*` column. On the
+  overnight account, whose queries are the web app's own, a field Scalable adds arrives
+  as a new column.
 - Privacy: the ids of the person and of the accounts never appear in the files, not even
   inside transaction ids.
 - One *Save as* window per export, in any folder: the CSV file of the account, or one ZIP
