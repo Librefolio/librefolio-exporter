@@ -5,7 +5,7 @@ Export your **Scalable Capital** transactions to CSV files for
 **overnight account** (*conto deposito*, *Tagesgeld*), on every plan, FREE included.
 
 - 🔒 Runs only in your browser: no server, no credentials, no data sent anywhere.
-- 🧪 Early preview (0.x), installed by hand.
+- 🧪 Early release, installed by hand.
 - 🤝 Not affiliated with, or endorsed by, Scalable Capital.
 
 <p align="center">
@@ -119,7 +119,9 @@ The first export reads the whole history. The next ones start from the last expo
 Each account has its CSV file, `scalable-broker_<date>_<time>.csv` and
 `scalable-deposit_<date>_<time>.csv`, with the columns of Scalable's official export
 ([format](docs/formats/scalable.md)); with both accounts they come together in
-`scalable_<date>_<time>.zip`. LibreFolio will import them through its Scalable plugin.
+`scalable_<date>_<time>.zip`. Import the files into LibreFolio: one broker for the broker
+account, one for the overnight account, as the
+[import guide](https://librefolio.github.io/LibreFolio/user/transactions/import/scalable/) shows.
 
 ## 🔄 Update
 

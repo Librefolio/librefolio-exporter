@@ -1,6 +1,6 @@
 {
   "name": "librefolio-exporter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Browser extension that exports broker transactions to CSV files for LibreFolio.",
   "license": "AGPL-3.0-only",

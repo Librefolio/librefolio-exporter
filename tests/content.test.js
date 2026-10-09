@@ -200,7 +200,7 @@ function scalableServer(calls, server) {
         return respond({ data: { account: { brokerPortfolio: { moreTransactions: { cursor: null, transactions: brokerTransactions() } } } } });
       }
       if (body.operationName === 'getTransactionDetails') {
-        return respond({ data: { account: { brokerPortfolio: { transactionDetails: { transactionReference: 'R1', averagePrice: 100, tradeTransactionAmounts: { transactionFee: 0, taxAmount: 0 } } } } } });
+        return respond({ data: { account: { brokerPortfolio: { transactionDetails: { transactionReference: 'R1', averagePrice: 100, tradeTransactionAmounts: { marketValuation: 250, transactionFee: 0, taxAmount: 0 } } } } } });
       }
       return refused;
     }

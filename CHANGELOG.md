@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-09
+
+### 🐛 Fixed
+
+- The `amount` of an executed trade whose details are read is now the value of the
+  shares, as in Scalable's own export, with fees and taxes only in `fee` and `tax`:
+  1.0.0 counted the fees in `amount` too. A file exported with 1.0.0 should be exported
+  again, choosing its period: **Since last** reads only new transactions.
+
+### ✨ Added
+
+- The README links the LibreFolio import guide.
+
 ## [1.0.0] - 2026-10-09
 
 First release, installed by hand.

@@ -48,7 +48,7 @@ function fakeApi(overrides) {
       },
       async getTransactionDetails(args) {
         calls.details.push(args.transactionId);
-        return { transactionReference: `ref-${args.transactionId}`, averagePrice: 10, tradeTransactionAmounts: { transactionFee: 0.99, taxAmount: 0 } };
+        return { transactionReference: `ref-${args.transactionId}`, averagePrice: 9.01, tradeTransactionAmounts: { marketValuation: 9.01, transactionFee: 0.99, taxAmount: 0 } };
       },
       async getDepositRecipe(savingsAccountId) {
         calls.recipes.push(savingsAccountId);
@@ -258,6 +258,30 @@ test('duplicates returned by overlapping pages are written once', () => {
 test('toCsv writes the full header in column order', () => {
   const text = exporter.toCsv([]);
   assert.equal(text, mapping.COLUMNS.map((column) => column.name).join(';') + '\n');
+});
+
+test('a broker file read with details keeps its 23 columns, with the value of the shares in amount', async () => {
+  const notes = [];
+  const { api } = fakeApi();
+  const outcome = await exporter.runExport({
+    api,
+    ids: IDS,
+    options: Object.assign({}, ALL, { deposit: false }),
+    context: CONTEXT,
+    diagnostics: (event, data) => notes.push([event, data]),
+  });
+  const lines = exporter.toCsv(outcome.broker).trimEnd().split('\n');
+  assert.equal(
+    lines[0],
+    'date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency;' +
+      'lf_account;lf_id;lf_subtype;lf_is_cancellation;lf_ordered_shares;lf_transaction_fee;lf_venue_fee;lf_crypto_spread_fee;lf_trading_venue',
+  );
+  assert.equal(lines[0].split(';').length, 23);
+  assert.ok(
+    lines.includes('2026-03-01;11:00:00;Executed;"ref-t3";"";Security;Buy;IE0000000001;1;9,01;-9,01;0,99;0;EUR;broker;t3;SINGLE;;;0.99;;;'),
+    'the web app gives -10, fee included',
+  );
+  assert.deepEqual(notes.filter(([event]) => event === 'new-fields'), []);
 });
 
 test('summarize keeps types, statuses and signs, never amounts or identifiers', async () => {

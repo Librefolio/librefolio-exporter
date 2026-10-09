@@ -59,7 +59,10 @@
     eltifQuantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed', account: 'broker' },
     'numberOfShares.filled': { prime: 'shares' },
     averagePrice: { prime: 'price' },
+    // A trade read with its details has in amount the value of the shares, as in the official
+    // export: the web app's amount, fees and taxes included, is then amount - fee - tax.
     amount: { prime: 'amount' },
+    'tradeTransactionAmounts.marketValuation': { prime: 'amount' },
     'tradeTransactionAmounts.taxAmount': { prime: 'tax' },
     'taxDetails.taxAmount': { prime: 'tax' },
     currency: { prime: 'currency' },
@@ -269,6 +272,16 @@
     return sources.some((source) => source && source.isCancellation === true) ? 'true' : '';
   }
 
+  // The value of a trade's shares with the sign of the trade: negative for a buy, positive
+  // for a sell, otherwise that of the web app's amount. '' when the value is not a number.
+  function sharesValue(summary, marketValuation) {
+    const value = format.toPlainString(marketValuation);
+    if (!/^-?\d+(?:\.\d+)?$/.test(value)) return '';
+    const magnitude = value.replace(/^-/, '');
+    const negative = summary.side === 'BUY' || (summary.side !== 'SELL' && format.toPlainString(summary.amount).startsWith('-'));
+    return negative && /[1-9]/.test(magnitude) ? `-${magnitude}` : magnitude;
+  }
+
   // detailsResult: { status: 'yes' | 'no' | 'error' | 'n/a', details }
   function mapBrokerTransaction(summary, detailsResult, context) {
     const details = (detailsResult && detailsResult.details) || null;
@@ -282,6 +295,9 @@
     // The shares ordered, only when they differ from the shares executed.
     const ordered = format.toPlainString(total !== undefined && total !== null ? total : rawQuantity);
     const price = format.toPlainString(details && details.averagePrice);
+    // Like the official export, the value of the shares, fees and taxes apart, when the details
+    // give it; otherwise the web app's amount, fees included.
+    const amount = sharesValue(summary, amounts.marketValuation) || format.toPlainString(summary.amount);
     // Read details without a fee or a tax mean none, like the official export's 0; without
     // the details, fee and tax stay empty: unknown.
     const fee = details ? format.sumDecimals([amounts.transactionFee, amounts.venueFee, amounts.cryptoSpreadFee]) || '0' : '';
@@ -300,7 +316,7 @@
       isin: summary.isin || summary.relatedIsin || '',
       shares: format.toDecimalComma(shares),
       price: format.toDecimalComma(price),
-      amount: format.toDecimalComma(format.toPlainString(summary.amount)),
+      amount: format.toDecimalComma(amount),
       fee: format.toDecimalComma(fee),
       tax: format.toDecimalComma(tax),
       currency: summary.currency || '',

@@ -23,12 +23,15 @@ do not say. Every field is written once, and columns are read by name.
 | Missing value | Empty field |
 
 Amounts are never rounded or recomputed. The only derived value is `fee`, the exact sum
-of `lf_transaction_fee`, `lf_venue_fee` and `lf_crypto_spread_fee`.
+of `lf_transaction_fee`, `lf_venue_fee` and `lf_crypto_spread_fee`. Some signs come from
+the transaction rather than from the value: the value of a trade's shares takes the sign
+of its `side`, and the overnight account's outflows become negative (see below).
 
 The *details* of executed trades (broker) and of interest payments (overnight account)
 are read with one extra request each, when the user keeps the option on. Without them,
-`reference`, `fee` and `tax` of those rows stay empty: unknown, not zero. When some
-details cannot be read, the panel says how many.
+`reference`, `fee` and `tax` of those rows stay empty: unknown, not zero; and a trade's
+`amount` is the web app's, fees included. When some details cannot be read, the panel
+says how many.
 
 ## Columns 1–14: Scalable's official layout
 
@@ -45,7 +48,7 @@ details cannot be read, the panel says how many.
 | `isin` | `isin`, or `relatedIsin` for distributions |
 | `shares` | Shares executed: details `numberOfShares.filled`, otherwise `quantity` (`eltifQuantity` for ELTIF); `0` for a cancelled, rejected or expired order, like the official export |
 | `price` | Details `averagePrice` |
-| `amount` | `amount`; on the overnight account, negative for outflows (see below) |
+| `amount` | For an executed trade whose details are read: details `tradeTransactionAmounts.marketValuation`, with the sign of the trade (negative for a buy): the value of the shares, fees and taxes apart, as in Scalable's own export. Otherwise `amount` as the web app gives it, fees included; on the overnight account, negative for outflows (see below) |
 | `fee` | Sum of the fees in the details; `0` when they give none |
 | `tax` | Details `tradeTransactionAmounts.taxAmount`; for interest, `taxDetails.taxAmount`, the tax withheld; `0` when they give none |
 | `currency` | `currency` |
@@ -88,7 +91,8 @@ The last five are in the broker's file only.
 
 | Account | Transaction | `amount` |
 |---|---|---|
-| Broker | Buy (single or savings plan) | Negative: the value of the shares plus the fees |
+| Broker | Buy (single or savings plan) | Negative: the value of the shares; without the details, the value of the shares plus the fees |
+| Broker | Sell | Positive: the value of the shares; without the details, as the web app gives it |
 | Broker | Cash `DEPOSIT`, `CASH_TRANSFER_IN` | Positive |
 | Broker | Cash `CASH_TRANSFER_OUT` (to the overnight account) | Negative |
 | Overnight | Interest | Positive, net of the tax withheld: the gross interest is `amount` + `tax` |
@@ -98,8 +102,9 @@ The last five are in the broker's file only.
 - The overnight account's web app gives every amount as positive: the file makes the
   outflows negative, as the broker does.
 - A trade's `amount` is not rounded to the cent (for example `-3161,145`), as in
-  Scalable's own export. Added up over a whole export, the `amount` of the executed rows
-  gives the account's balance, up to such half cents (checked on real data).
+  Scalable's own export. Added up over a whole export, the `amount` of the executed rows,
+  less the `fee` and `tax` of the broker's trades, gives the account's balance, up to
+  such half cents (checked on real data).
 - Cash movements come with a date and no time: the web app gives midnight UTC, written
   as `02:00:00` German summer time (`01:00:00` in winter).
 
@@ -131,6 +136,7 @@ that read them (2026-10).
 | Accounts | Broker only | Broker and overnight account |
 | `reference` | On every row, 15 letters and digits (`SCAL…`) | `SCAL…` on executed trades and `INTEREST-PAY-…` on interest, whose details are read; empty on the other rows, whose id is in `lf_id` |
 | `shares` | Shares executed: `0` for a cancelled order | The same |
+| `amount` of trades | The value of the shares, fees and taxes apart | The same when the details are read; when they are not, the web app's amount, fees included |
 | `fee`, `tax` of trades | Always filled, `0` when none | The same when the details are read; empty when they are not: unknown |
 | `fee`, `tax` of cash rows | `fee` `0`, `tax` empty in the samples ❓ | Both empty; `tax` filled on interest |
 | `price` of security transfers | Filled | Empty: their details are not read |

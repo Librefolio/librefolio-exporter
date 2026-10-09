@@ -2,9 +2,9 @@
  * GraphQL operations of the Scalable Capital web app. GraphQL answers only the fields a
  * query asks for, so the broker queries below ask only for what the CSV writes
  * (docs/formats/scalable.md): the transaction list, and from the details what the list does not
- * give (reference, shares executed and ordered, price, fees and taxes, venue). Every field is also
- * one more place where a schema change breaks the export. The overnight account's
- * queries are the web app's own, used as they are.
+ * give (reference, shares executed and ordered, price, value of the shares, fees and taxes,
+ * venue). Every field is also one more place where a schema change breaks the export. The
+ * overnight account's queries are the web app's own, used as they are.
  */
 (function (root) {
   'use strict';
@@ -91,6 +91,7 @@ fragment BrokerEltifTransactionSummaryFragment on BrokerEltifTransactionSummary 
           }
           averagePrice
           tradeTransactionAmounts {
+            marketValuation
             taxAmount
             transactionFee
             venueFee

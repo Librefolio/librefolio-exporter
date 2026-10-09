@@ -49,7 +49,8 @@ BROKER = {
          "amount": 500, "currency": "EUR"},
     ]}}}}},
     "getTransactionDetails": {"data": {"account": {"brokerPortfolio": {"transactionDetails": {
-        "transactionReference": "R1", "averagePrice": 100, "tradeTransactionAmounts": {"transactionFee": 0.99, "taxAmount": 0}}}}}},
+        "transactionReference": "R1", "averagePrice": 100,
+        "tradeTransactionAmounts": {"marketValuation": 250, "transactionFee": 0.99, "taxAmount": 0}}}}}},
 }
 DEPOSIT_LIST = {"data": {"account": {"savingsAccount": {"moreTransactions": {"cursor": None, "total": 2, "transactions": [
     {"id": "d1", "type": "CASH_TRANSACTION", "status": "SETTLED", "isCancellation": False, "description": "Interest", "amount": 1.23,
