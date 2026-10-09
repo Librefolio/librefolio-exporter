@@ -41,6 +41,7 @@ and checks it with the system `unzip -t` where installed.
 | `src/background.js` | Downloads (one *Save as* window, the download folder learnt), identifiers seen on the pages, update check |
 | `tests/` | `node:test` suites |
 | `tests/browser/` | Real-browser test with a fake Scalable server |
+| `docs/formats/` | The CSV format of each broker's files, one page per broker: `scalable.md` |
 | `docs/images/` | Screenshots for the README: installation (by hand), button and panel (`SHOTS_DIR` of the real-browser test) |
 
 Rules kept by `npm run check`: no HTML built from strings, no `eval`, no remote code,

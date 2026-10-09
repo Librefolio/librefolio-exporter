@@ -4,15 +4,13 @@
  * The first 14 columns follow the official Scalable CSV export (PRIME), so tools
  * that read it can read these files too; their labels are a best-effort mapping.
  * The lf_* columns carry, verbatim, what the Prime columns do not: every field that the
- * queries return is written once. See docs/FORMAT.md.
+ * queries return is written once. See docs/formats/scalable.md.
  */
 (function (root) {
   'use strict';
 
   const isNode = typeof module === 'object' && module.exports;
   const format = isNode ? require('../../shared/format.js') : root.LFX.format;
-
-  const FORMAT_VERSION = '1';
 
   const PRIME_COLUMNS = [
     { name: 'date' },
@@ -31,9 +29,6 @@
     { name: 'currency' },
   ];
 
-  // Columns closing every row, after the fields.
-  const CLOSING_COLUMNS = ['lf_details', 'lf_exporter', 'lf_format'].map((name) => ({ name }));
-
   // Where each field of the web app goes, so that none is written twice: in the lf_*
   // column named here (`column`); only in the Prime column that already carries it
   // (`prime`); or nowhere, because it repeats another field (`none`). A column that only
@@ -46,14 +41,14 @@
     securityTransactionType: { column: 'lf_subtype' },
     cashTransactionType: { column: 'lf_subtype' },
     nonTradeSecurityTransactionType: { column: 'lf_subtype' },
-    status: { column: 'lf_status' },
-    isCancellation: { column: 'lf_is_cancellation' },
+    isCancellation: { column: 'lf_is_cancellation', when: 'a reversal' },
     'numberOfShares.total': { column: 'lf_ordered_shares', when: 'not all were executed', account: 'broker' },
     'tradeTransactionAmounts.transactionFee': { column: 'lf_transaction_fee', account: 'broker' },
     'tradeTransactionAmounts.venueFee': { column: 'lf_venue_fee', account: 'broker' },
     'tradeTransactionAmounts.cryptoSpreadFee': { column: 'lf_crypto_spread_fee', account: 'broker' },
     tradingVenue: { column: 'lf_trading_venue', account: 'broker' },
     lastEventDateTime: { prime: 'date, time' },
+    status: { prime: 'status' },
     transactionReference: { prime: 'reference' },
     description: { prime: 'description' },
     type: { prime: 'assetType, type' },
@@ -154,8 +149,8 @@
     }
   }
 
-  // The new fields among the rows, sorted, and every column of a file: the fixed ones, the
-  // new fields, then the closing columns.
+  // The new fields among the rows, sorted, and every column of a file: the fixed ones of its
+  // accounts, then the new fields.
   function extraColumns(rows) {
     const fixed = new Set(COLUMNS.map((column) => column.name));
     const extra = new Set();
@@ -164,26 +159,22 @@
   }
 
   function columnsFor(rows) {
-    const closing = new Set(CLOSING_COLUMNS.map((column) => column.name));
     const accounts = new Set(rows.map((row) => row.lf_account));
     const ofTheseAccounts = (column) => !column.account || rows.length === 0 || accounts.has(column.account);
-    return COLUMNS.filter((column) => !closing.has(column.name) && ofTheseAccounts(column)).concat(
-      extraColumns(rows).map((name) => ({ name })),
-      CLOSING_COLUMNS,
-    );
+    return COLUMNS.filter(ofTheseAccounts).concat(extraColumns(rows).map((name) => ({ name })));
   }
 
   // Not fields of the web app: which account, and which of its overnight accounts.
   const ACCOUNT_COLUMNS = ['lf_account', 'lf_account_index'].map((name) => ({ name }));
 
-  // The fixed lf_* columns: the account, the known fields in order, with the account
-  // that fills them when only one does, the closing columns.
+  // The fixed lf_* columns: the account, then the known fields in order, with the account
+  // that fills them when only one does.
   const FIELD_COLUMNS = [];
   for (const field of Object.values(FIELDS)) {
     if (!field.column || FIELD_COLUMNS.some((column) => column.name === field.column)) continue;
     FIELD_COLUMNS.push(field.account ? { name: field.column, account: field.account } : { name: field.column });
   }
-  const LF_COLUMNS = ACCOUNT_COLUMNS.concat(FIELD_COLUMNS, CLOSING_COLUMNS);
+  const LF_COLUMNS = ACCOUNT_COLUMNS.concat(FIELD_COLUMNS);
 
   const COLUMNS = PRIME_COLUMNS.concat(LF_COLUMNS);
 
@@ -266,12 +257,15 @@
     return subtype || summary.type || '';
   }
 
-  function emptyRow(context) {
+  function emptyRow() {
     const row = {};
     for (const column of COLUMNS) row[column.name] = '';
-    row.lf_exporter = context.exporter;
-    row.lf_format = FORMAT_VERSION;
     return row;
+  }
+
+  // A reversal of another transaction: marked, since it otherwise looks like any other.
+  function reversal(...sources) {
+    return sources.some((source) => source && source.isCancellation === true) ? 'true' : '';
   }
 
   // detailsResult: { status: 'yes' | 'no' | 'error' | 'n/a', details }
@@ -293,7 +287,7 @@
     const tax = details ? format.toPlainString(amounts.taxAmount) || '0' : '';
     const fields = mergedFields(summary, details);
 
-    const row = emptyRow(context);
+    const row = emptyRow();
     Object.assign(row, {
       date: when.date,
       time: when.time,
@@ -311,8 +305,8 @@
       currency: summary.currency || '',
       lf_account: 'broker',
       lf_account_index: '1',
+      lf_is_cancellation: reversal(summary, details),
       lf_ordered_shares: ordered && ordered !== shares ? ordered : '',
-      lf_details: (detailsResult && detailsResult.status) || 'n/a',
     });
     writeFields(row, fields, context);
     return row;
@@ -328,7 +322,7 @@
     const outflow = DEPOSIT_OUTFLOW.test(subtype) && /^[0-9.]+$/.test(amount) && /[1-9]/.test(amount);
     const signedAmount = outflow ? `-${amount}` : amount;
     const fields = mergedFields(transaction, details);
-    const row = emptyRow(context);
+    const row = emptyRow();
     Object.assign(row, {
       date: when.date,
       time: when.time,
@@ -342,18 +336,16 @@
       currency: transaction.currency || '',
       lf_account: 'deposit',
       lf_account_index: String(accountIndex),
-      lf_details: (detailsResult && detailsResult.status) || (needsDepositDetails(transaction) ? 'no' : 'n/a'),
+      lf_is_cancellation: reversal(transaction, details),
     });
     writeFields(row, fields, context);
     return row;
   }
 
   const api = {
-    FORMAT_VERSION,
     PRIME_COLUMNS,
     LF_COLUMNS,
     COLUMNS,
-    CLOSING_COLUMNS,
     FIELDS,
     columnsFor,
     extraColumns,

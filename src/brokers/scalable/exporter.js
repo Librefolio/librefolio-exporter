@@ -238,12 +238,11 @@
         assetType: row.assetType,
         type: row.type,
         subtype: row.lf_subtype,
-        status: row.lf_status,
+        status: row.status,
         amount: sign(row.amount),
         shares: sign(row.shares),
         fee: sign(row.fee),
         tax: sign(row.tax),
-        details: row.lf_details,
       };
       const key = JSON.stringify(entry);
       if (!groups.has(key)) groups.set(key, Object.assign(entry, { count: 0 }));

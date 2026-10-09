@@ -22,8 +22,8 @@ First release, installed by hand.
 - Both accounts exported from any page: the portfolio, the overnight account and the
   query of its list seen on the pages are remembered until the browser closes.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
-  ([format version 1](docs/FORMAT.md)): every field that the queries return is written
-  once, in its official column or, when none carries it, in an `lf_*` column. The
+  with what those do not say: transaction id, exact type, reversals, the parts of the
+  fee, the venue ([format](docs/formats/scalable.md)). Every field is written once; the
   overnight account's file leaves out the columns that only the broker fills. On the
   overnight account, whose queries are the web app's own, a field Scalable adds arrives
   as a new column.

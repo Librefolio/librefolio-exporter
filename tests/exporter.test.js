@@ -6,7 +6,7 @@ const exporter = require('../src/brokers/scalable/exporter.js');
 const { ExportError } = require('../src/brokers/scalable/client.js');
 const mapping = require('../src/brokers/scalable/mapping.js');
 
-const CONTEXT = { exporter: 'librefolio-exporter/0.0.0-test' };
+const CONTEXT = {};
 const IDS = { personId: 'person', portfolioId: 'portfolio', savingsAccountIds: ['s1'] };
 const RECIPE = {
   operationName: 'Transactions',
@@ -82,15 +82,13 @@ test('both accounts are exported, with details only for executed trades', async 
   assert.deepEqual(calls.lists, [['s1', 'short-1']]);
   assert.deepEqual(calls.depositDetails, [['short-1', 's1', 'd1']], 'interest details use the person id of the recipe');
   const interest = outcome.deposit[0];
-  assert.equal(interest.lf_details, 'yes');
   assert.equal(interest.tax, '0,7');
   assert.equal(interest.reference, 'ref-d1');
   const byId = Object.fromEntries(outcome.broker.map((row) => [row.lf_id, row]));
-  assert.equal(byId.t3.lf_details, 'yes');
   assert.equal(byId.t3.reference, 'ref-t3');
   assert.equal(byId.t3.fee, '0,99');
-  assert.equal(byId.t1.lf_details, 'n/a', 'non-executed trades never need details');
-  assert.equal(byId.c2.lf_details, 'n/a');
+  assert.deepEqual([byId.t1.reference, byId.t1.fee], ['', ''], 'non-executed trades never need details');
+  assert.deepEqual([byId.c2.reference, byId.c2.fee], ['', '']);
   assert.ok(progress.includes('progressBrokerDetails'));
   assert.ok(progress.includes('progressDeposit'));
   assert.ok(progress.includes('progressDepositDetails'));
@@ -111,13 +109,13 @@ test('the period filters rows and stops paging once a page ends before "from"', 
   assert.equal(stopWhen([cash('x', '2026-02-01T10:00:00Z')]), false);
 });
 
-test('without details, executed trades and interest are flagged as not read', async () => {
+test('without details, the fees and taxes of trades and interest stay empty: unknown', async () => {
   const { api, calls } = fakeApi();
   const outcome = await exporter.runExport({ api, ids: IDS, options: Object.assign({}, ALL, { details: false }), context: CONTEXT });
   assert.deepEqual(calls.details, []);
   assert.deepEqual(calls.depositDetails, []);
-  assert.equal(outcome.broker.find((row) => row.lf_id === 't3').lf_details, 'no');
-  assert.equal(outcome.deposit[0].lf_details, 'no');
+  const t3 = outcome.broker.find((row) => row.lf_id === 't3');
+  assert.deepEqual([t3.reference, t3.fee, t3.tax], ['', '', '']);
   assert.equal(outcome.deposit[0].tax, '', 'unknown without the details');
   assert.equal(outcome.deposit[0].reference, '');
 });
@@ -134,7 +132,7 @@ test('a refusal while reading interest details stops the remaining ones', async 
   });
   const outcome = await exporter.runExport({ api, ids: IDS, options: Object.assign({}, ALL, { broker: false }), context: CONTEXT });
   assert.deepEqual(calls.depositDetails, ['i3']);
-  assert.deepEqual(outcome.deposit.map((row) => row.lf_details), ['error', 'error', 'error']);
+  assert.deepEqual(outcome.deposit.map((row) => row.tax), ['', '', ''], 'unknown, and the panel warns');
   assert.deepEqual(outcome.warnings, [{ key: 'warnDetails', args: [3] }]);
 });
 
@@ -152,7 +150,7 @@ test('a rate limit while reading details stops further detail requests and warns
   });
   const outcome = await exporter.runExport({ api, ids: IDS, options: Object.assign({}, ALL, { deposit: false }), context: CONTEXT });
   assert.deepEqual(calls.details, ['a', 'b']);
-  assert.deepEqual(outcome.broker.map((row) => row.lf_details), ['yes', 'error', 'error']);
+  assert.deepEqual(outcome.broker.map((row) => row.fee), ['0', '', ''], 'read, then unknown');
   assert.deepEqual(outcome.warnings, [{ key: 'warnDetails', args: [2] }]);
 });
 
@@ -268,18 +266,17 @@ test('summarize keeps types, statuses and signs, never amounts or identifiers', 
   const summary = exporter.summarize([].concat(outcome.broker, outcome.deposit));
   const text = JSON.stringify(summary);
   for (const secret of ['t3', 'c2', 'd1', 'IE0000000001', '-10', '100']) assert.ok(!text.includes(`"${secret}"`), secret);
-  const buy = summary.find((entry) => entry.assetType === 'Security' && entry.status === 'SETTLED');
+  const buy = summary.find((entry) => entry.assetType === 'Security' && entry.status === 'Executed');
   assert.deepEqual(buy, {
     account: 'broker',
     assetType: 'Security',
     type: 'Buy',
     subtype: 'SINGLE',
-    status: 'SETTLED',
+    status: 'Executed',
     amount: '-',
     shares: '+',
     fee: '+',
     tax: '0',
-    details: 'yes',
     count: 1,
   });
   const interest = summary.find((entry) => entry.account === 'deposit');
@@ -306,7 +303,7 @@ test('a field the web app adds arrives in the CSV, and its name in the diagnosti
     'names only, never values',
   );
   const header = exporter.toCsv(outcome.broker).split('\n')[0].split(';');
-  assert.deepEqual(header.slice(-4), ['lf_brand_new_field', 'lf_details', 'lf_exporter', 'lf_format']);
+  assert.deepEqual(header.slice(-2), ['lf_trading_venue', 'lf_brand_new_field'], 'the new field comes last');
   assert.match(outcome.broker[0].description, /^paid from portfolio-[0-9a-f]{8}$/, 'the portfolio id never appears');
   assert.match(outcome.deposit[0].lf_id, /^CASH_person-[0-9a-f]{8}_s1_x$/, "the interest app's short code of the person is masked too");
 });

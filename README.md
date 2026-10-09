@@ -117,7 +117,7 @@ The first export reads the whole history. The next ones start from the last expo
 
 Each account has its CSV file, `scalable-broker_<date>_<time>.csv` and
 `scalable-deposit_<date>_<time>.csv`, with the columns of Scalable's official export
-([format](docs/FORMAT.md)); with both accounts they come together in
+([format](docs/formats/scalable.md)); with both accounts they come together in
 `scalable_<date>_<time>.zip`. LibreFolio will import them through its Scalable plugin.
 
 ## 🔄 Update
@@ -151,7 +151,7 @@ would be a second extension, starting from scratch.
 
 - [How it works](docs/HOW-IT-WORKS.md): accounts, period, saving, update check,
   permissions, diagnostics.
-- [CSV format](docs/FORMAT.md).
+- [CSV format of the Scalable Capital files](docs/formats/scalable.md).
 - [Development](docs/DEVELOPMENT.md): tests, structure, release.
 - [Changelog](CHANGELOG.md).
 

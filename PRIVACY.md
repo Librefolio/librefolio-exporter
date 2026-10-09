@@ -45,7 +45,7 @@ the person, of the portfolio and of the overnight accounts are never written: wh
 value contains one, as the overnight account's transaction ids do, it is replaced by a
 short tag that does not give the id back. Descriptions are written as received, names
 and IBANs of transfers included, because LibreFolio shows them with the imported
-transactions. Details in [docs/FORMAT.md](docs/FORMAT.md#privacy).
+transactions. Details in [docs/formats/scalable.md](docs/formats/scalable.md#privacy).
 
 To give its own files their names, the extension takes part in naming downloads
 (Chrome's `downloads.onDeterminingFilename`): it answers only for the files it saves,

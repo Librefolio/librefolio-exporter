@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const mapping = require('../src/brokers/scalable/mapping.js');
 
-const CONTEXT = { exporter: 'librefolio-exporter/0.0.0-test' };
+const CONTEXT = {};
 const PRIME_HEADER = 'date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency';
 
 function savingsPlanBuy() {
@@ -38,10 +38,12 @@ function buyDetails() {
   };
 }
 
-// Columns that would repeat a Prime column, or another field.
+// Columns that would repeat a Prime column or another field, or that tell nothing the
+// other columns do not.
 const NEVER_WRITTEN = ['lf_kind', 'lf_side', 'lf_timestamp_utc', 'lf_amount', 'lf_quantity', 'lf_price', 'lf_filled_shares', 'lf_total_shares',
   'lf_total_amount', 'lf_market_valuation', 'lf_tax_amount', 'lf_gross_amount', 'lf_fee', 'lf_transactional_fee', 'lf_taxes',
-  'lf_transaction_reference', 'lf_description', 'lf_isin', 'lf_related_isin', 'lf_currency', 'lf_is_pending', 'lf_transaction_history'];
+  'lf_transaction_reference', 'lf_description', 'lf_isin', 'lf_related_isin', 'lf_currency', 'lf_is_pending', 'lf_transaction_history',
+  'lf_status', 'lf_details', 'lf_exporter', 'lf_format'];
 
 test('the first 14 columns are the official Scalable CSV header', () => {
   assert.equal(mapping.PRIME_COLUMNS.map((column) => column.name).join(';'), PRIME_HEADER);
@@ -69,28 +71,23 @@ test('a savings-plan buy with details maps to Prime columns and verbatim lf_* co
   assert.equal(row.lf_account_index, '1');
   assert.equal(row.lf_id, 'tx-buy-1');
   assert.equal(row.lf_subtype, 'SAVINGS_PLAN');
-  assert.equal(row.lf_status, 'SETTLED');
-  assert.equal(row.lf_is_cancellation, 'false');
+  assert.equal(row.lf_is_cancellation, '', 'written only for a reversal');
   assert.equal(row.lf_ordered_shares, '', 'all the shares ordered were executed');
   assert.equal(row.lf_transaction_fee, '0.99');
   assert.equal(row.lf_venue_fee, '0.1');
   assert.equal(row.lf_crypto_spread_fee, '');
   assert.equal(row.lf_trading_venue, 'GETTEX');
-  assert.equal(row.lf_details, 'yes');
-  assert.equal(row.lf_exporter, CONTEXT.exporter);
-  assert.equal(row.lf_format, mapping.FORMAT_VERSION);
   for (const name of NEVER_WRITTEN) assert.equal(row[name], undefined, `${name}: in a Prime column, or repeats another field`);
 });
 
-test('a sell whose details failed keeps the summary and flags the missing details', () => {
+test('a sell whose details failed keeps the summary, with fee and tax unknown', () => {
   const summary = Object.assign(savingsPlanBuy(), { id: 'tx-sell', side: 'SELL', securityTransactionType: 'SINGLE', amount: 250.5, quantity: 2 });
   const row = mapping.mapBrokerTransaction(summary, { status: 'error' }, CONTEXT);
   assert.equal(row.type, 'Sell');
   assert.equal(row.reference, '', 'no reference without the details');
   assert.equal(row.price, '');
-  assert.equal(row.fee, '');
+  assert.deepEqual([row.fee, row.tax], ['', ''], 'empty: unknown, not zero');
   assert.equal(row.amount, '250,5');
-  assert.equal(row.lf_details, 'error');
 });
 
 test('cash transactions map to the Prime cash types', () => {
@@ -104,7 +101,6 @@ test('cash transactions map to the Prime cash types', () => {
   assert.equal(distribution.type, 'Distribution');
   assert.equal(distribution.isin, 'US5949181045');
   assert.equal(distribution.amount, '1,08');
-  assert.equal(distribution.lf_details, 'n/a');
 
   const expected = {
     DEPOSIT: 'Deposit',
@@ -183,7 +179,6 @@ test('overnight-account transactions map to cash rows', () => {
   assert.equal(row.lf_account, 'deposit');
   assert.equal(row.lf_account_index, '2');
   assert.equal(row.lf_subtype, 'INTEREST');
-  assert.equal(row.lf_details, 'no', 'interest whose details were not read');
   assert.equal(row.tax, '', 'unknown without the details');
 });
 
@@ -196,12 +191,10 @@ test('interest details add the withheld tax and the reference', () => {
   assert.equal(row.amount, '11,05', 'the amount stays the net one, as the web app shows it');
   assert.equal(row.tax, '3,88');
   assert.equal(row.reference, 'REF-1');
-  assert.equal(row.lf_is_cancellation, 'false');
+  assert.equal(row.lf_is_cancellation, '');
   assert.equal(row.lf_gross_amount, undefined, 'the gross amount is amount + tax');
-  assert.equal(row.lf_details, 'yes');
 
   const failed = mapping.mapDepositTransaction(interest, 1, CONTEXT, { status: 'error' });
-  assert.equal(failed.lf_details, 'error');
   assert.equal(failed.reference, '');
   assert.equal(failed.tax, '');
 });
@@ -213,7 +206,6 @@ test('only interest that was paid needs details', () => {
   assert.equal(mapping.needsDepositDetails({ cashTransactionType: 'WITHDRAWAL', status: 'SETTLED' }), false);
   assert.equal(mapping.needsDepositDetails(null), false);
   const row = mapping.mapDepositTransaction({ id: 'w1', cashTransactionType: 'WITHDRAWAL', status: 'SETTLED', amount: 1.03 }, 1, CONTEXT);
-  assert.equal(row.lf_details, 'n/a');
   assert.equal(row.type, 'Withdrawal');
   assert.equal(row.amount, '-1,03');
 });
@@ -242,16 +234,13 @@ test('each field is written once; a field the web app adds gets a column of its 
 
   assert.deepEqual(mapping.extraColumns([row]), ['lf_brand_new_field', 'lf_details_last_event_date_time', 'lf_legs', 'lf_new_object_inner_value']);
   const names = mapping.columnsFor([row]).map((column) => column.name);
-  assert.deepEqual(names.slice(-8), [
+  assert.deepEqual(names.slice(-5), [
     'lf_trading_venue',
     'lf_brand_new_field',
     'lf_details_last_event_date_time',
     'lf_legs',
     'lf_new_object_inner_value',
-    'lf_details',
-    'lf_exporter',
-    'lf_format',
-  ]);
+  ], 'the new fields come last, sorted');
   assert.deepEqual(mapping.columnsFor([]), mapping.COLUMNS, 'without new fields, the fixed columns');
 });
 
@@ -288,8 +277,8 @@ test('like the official export, an order never executed has no shares', () => {
   assert.deepEqual([transfer.shares, transfer.lf_ordered_shares], ['3', '']);
 });
 
-test('docs/FORMAT.md says where every field goes, and lists every fixed column', () => {
-  const doc = fs.readFileSync(path.join(__dirname, '..', 'docs', 'FORMAT.md'), 'utf8');
+test('docs/formats/scalable.md names every field and every fixed column', () => {
+  const doc = fs.readFileSync(path.join(__dirname, '..', 'docs', 'formats', 'scalable.md'), 'utf8');
   for (const field of Object.keys(mapping.FIELDS)) assert.ok(doc.includes(`\`${field}\``), field);
   for (const column of mapping.LF_COLUMNS) assert.ok(doc.includes(`\`${column.name}\``), column.name);
 });
@@ -328,8 +317,18 @@ test('each file has only the columns of its account', () => {
   const deposit = mapping.mapDepositTransaction({ id: 'd1', cashTransactionType: 'WITHDRAWAL', status: 'SETTLED', amount: 1, currency: 'EUR' }, 1, CONTEXT);
   const broker = mapping.mapBrokerTransaction(savingsPlanBuy(), { status: 'yes', details: buyDetails() }, CONTEXT);
   assert.deepEqual(names([deposit]).slice(0, 14), mapping.PRIME_COLUMNS.map((column) => column.name), 'the official columns stay, empty or not');
-  assert.deepEqual(names([deposit]).slice(14), ['lf_account', 'lf_account_index', 'lf_id', 'lf_subtype', 'lf_status', 'lf_is_cancellation', 'lf_details', 'lf_exporter', 'lf_format']);
+  assert.deepEqual(names([deposit]).slice(14), ['lf_account', 'lf_account_index', 'lf_id', 'lf_subtype', 'lf_is_cancellation']);
   for (const name of BROKER_ONLY) assert.ok(names([broker]).includes(name), name);
   assert.deepEqual(names([broker, deposit]), names([broker]), 'rows of both accounts: every column');
   assert.ok(mapping.LF_COLUMNS.filter((column) => column.account).every((column) => BROKER_ONLY.includes(column.name)));
+});
+
+test('a reversal is marked; every other transaction leaves the column empty', () => {
+  const broker = (fields, details) => mapping.mapBrokerTransaction(Object.assign(savingsPlanBuy(), fields), details ? { status: 'yes', details } : null, CONTEXT);
+  assert.equal(broker({ isCancellation: true }).lf_is_cancellation, 'true');
+  assert.equal(broker({ isCancellation: false }).lf_is_cancellation, '');
+  assert.equal(broker({ isCancellation: undefined }, Object.assign(buyDetails(), { isCancellation: true })).lf_is_cancellation, 'true', 'or as the details say');
+  const deposit = (isCancellation) => mapping.mapDepositTransaction({ id: 'x', cashTransactionType: 'DEPOSIT', status: 'SETTLED', amount: 1, isCancellation }, 1, CONTEXT);
+  assert.equal(deposit(true).lf_is_cancellation, 'true');
+  assert.equal(deposit(false).lf_is_cancellation, '');
 });

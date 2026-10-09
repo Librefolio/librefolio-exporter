@@ -12,7 +12,6 @@
   const INFO_URL = 'https://github.com/Librefolio/librefolio-exporter/blob/main/docs/RISKS.md';
   const APP_PATH = /^\/(broker|interest|cockpit|savings|account)(\/|$)/;
   const TRANSACTIONS_PAGE = /^\/interest\/overnight\/([^/]+)\/transactions\/?$/;
-  const EXPORTER_ID = 'librefolio-exporter';
   const DEFAULT_SETTINGS = {
     riskAccepted: false,
     lastExportDates: {},
@@ -394,7 +393,6 @@
         api,
         ids,
         options,
-        context: { exporter: `${EXPORTER_ID}/${version}` },
         progress: onProgress,
         diagnostics: log,
       });
