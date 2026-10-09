@@ -13,6 +13,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const format = require('../src/shared/format.js');
+const filesApi = require('../src/shared/files.js');
+const { unzip } = require('./unzip.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const ORIGIN = 'https://de.scalable.capital';
@@ -232,10 +234,8 @@ function createBackground(options) {
   );
   // ignoreNames: like another extension that names downloads, the name given to
   // chrome.downloads.download is replaced; the extension's own listener is asked last.
-  // root: Chrome's download folder. A file with a window (saveAs, or any file when
-  // askEveryFile, Chrome's "ask where to save each file") stays unnamed for windowPolls
-  // looks, then is saved in dialogDirectory; it is cancelled when dialogCancels is true, or
-  // is the number of the first window the user closes. Paths matching refuseNames are refused.
+  // root: Chrome's download folder. With the "Save as" window, a file stays unnamed for
+  // windowPolls looks, then is saved in dialogDirectory, or cancelled when dialogCancels.
   const background = {
     downloads: [],
     session: {},
@@ -246,14 +246,12 @@ function createBackground(options) {
     local: {},
     clock: Date.now(),
     root: '/Users/test/Downloads',
-    dialogDirectory: '/Users/test/Downloads/Reports',
+    dialogDirectory: '/Users/test/Documents/Finanza',
     dialogCancels: false,
-    askEveryFile: false,
     windowPolls: 0,
-    refuseNames: null,
     dialogs: 0,
     items: new Map(),
-    removed: [],
+    shown: [],
   };
   class FakeDate extends Date {}
   FakeDate.now = () => background.clock;
@@ -279,7 +277,6 @@ function createBackground(options) {
     downloads: {
       onDeterminingFilename: { addListener: (listener) => background.nameListeners.push(listener) },
       download: async (options) => {
-        if (background.refuseNames && background.refuseNames.test(options.filename)) throw new Error('Invalid filename');
         const item = { id: background.downloads.length + 1, url: options.url, filename: background.ignoreNames ? 'download.csv' : options.filename, byExtensionId: EXTENSION_ID };
         let finalName = item.filename;
         for (const listener of background.nameListeners) {
@@ -287,13 +284,11 @@ function createBackground(options) {
             if (suggestion && suggestion.filename) finalName = suggestion.filename;
           });
         }
-        const window = options.saveAs === true || background.askEveryFile;
         const entry = { id: item.id, filename: `${background.root}/${finalName}`, state: 'complete', pending: 0, byExtensionId: EXTENSION_ID };
-        if (window) {
+        if (options.saveAs === true) {
           background.dialogs++;
           entry.pending = background.windowPolls;
-          const cancels = background.dialogCancels === true || (typeof background.dialogCancels === 'number' && background.dialogs >= background.dialogCancels);
-          if (cancels) Object.assign(entry, { filename: '', state: 'interrupted', error: 'USER_CANCELED' });
+          if (background.dialogCancels) Object.assign(entry, { filename: '', state: 'interrupted', error: 'USER_CANCELED' });
           else entry.filename = `${background.dialogDirectory}/${finalName.split('/').pop()}`;
         }
         background.items.set(item.id, entry);
@@ -305,23 +300,12 @@ function createBackground(options) {
         if (!entry) return [];
         if (entry.pending > 0) {
           entry.pending--;
-          return [{ id: entry.id, filename: '', state: 'in_progress', byExtensionId: EXTENSION_ID }];
+          return [{ id: entry.id, filename: '', state: 'in_progress', byExtensionId: entry.byExtensionId }];
         }
-        return [{ id: entry.id, filename: entry.filename, state: entry.state, error: entry.error, byExtensionId: EXTENSION_ID }];
+        return [{ id: entry.id, filename: entry.filename, state: entry.state, error: entry.error, byExtensionId: entry.byExtensionId }];
       },
-      removeFile: async (id) => {
-        const entry = background.items.get(id);
-        if (!entry || entry.state !== 'complete' || entry.pending > 0) throw new Error('Download must be complete');
-        entry.removed = true;
-        background.removed.push(entry.filename);
-      },
-      cancel: async (id) => {
-        const entry = background.items.get(id);
-        if (entry && entry.state !== 'complete') Object.assign(entry, { state: 'interrupted', error: 'USER_CANCELED' });
-      },
-      erase: async (query) => {
-        background.items.delete(query.id);
-        return [query.id];
+      show: (id) => {
+        background.shown.push(id);
       },
     },
   };
@@ -361,16 +345,23 @@ function createBackground(options) {
       const waiting = background.listeners[0](message, sender || { id: EXTENSION_ID }, resolve);
       if (!waiting) resolve(undefined);
     });
-  // The files saved and still there, with the name each was given.
-  const kept = () => background.downloads.filter((options) => options.entry.state === 'complete' && !options.entry.removed);
-  background.saved = () => kept().map((options) => options.entry.filename);
+  // The files saved, with the name each was given; a ZIP also lists its entries.
   background.files = () =>
-    kept().map((options) => ({
-      filename: options.finalName,
-      saveAs: options.saveAs,
-      conflictAction: options.conflictAction,
-      text: Buffer.from(options.url.split(',')[1], 'base64').toString('utf8'),
-    }));
+    background.downloads
+      .filter((options) => options.entry.state === 'complete')
+      .map((options) => {
+        const bytes = Buffer.from(options.url.split(',')[1], 'base64');
+        const zip = options.url.startsWith('data:application/zip;');
+        return {
+          id: options.id,
+          filename: options.finalName,
+          path: options.entry.filename,
+          saveAs: options.saveAs,
+          conflictAction: options.conflictAction,
+          text: zip ? null : bytes.toString('utf8'),
+          entries: zip ? unzip(bytes) : null,
+        };
+      });
   return background;
 }
 
@@ -385,8 +376,6 @@ function createPage(options) {
       links: ['/interest/overnight/sav-123456'],
       scripts: [],
       server: null,
-      // Chrome's folder picker, window.showDirectoryPicker: absent unless given, as in Brave.
-      picker: undefined,
     },
     options || {},
   );
@@ -444,7 +433,6 @@ function createPage(options) {
     sessionStorage: fakeStorage(settings.session),
     localStorage: fakeStorage({}),
     fetch: scalableServer(page.calls, page.server),
-    showDirectoryPicker: settings.picker,
     URL: Object.assign(
       function (...args) {
         return new URL(...args);
@@ -460,6 +448,9 @@ function createPage(options) {
     ),
     URLSearchParams,
     Blob,
+    Response,
+    CompressionStream,
+    btoa,
     TextEncoder,
     AbortController,
     setTimeout: (callback) => {
@@ -596,12 +587,29 @@ test('the content scripts export both accounts end to end', async () => {
   assert.equal(find('lfx-to').value, format.todayBerlin(), '"to" is today');
 
   await acceptRiskAndExport(page);
+  const files = page.background.files();
+  assert.equal(files.length, 1, 'both accounts in one file');
+  const [saved] = files;
+  assert.match(saved.filename, /^scalable_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$/);
+  assert.deepEqual([saved.saveAs, saved.conflictAction], [true, 'uniquify']);
+  assert.equal(page.background.dialogs, 1, 'one "Save as" window');
+  assert.equal(saved.path, `/Users/test/Documents/Finanza/${saved.filename}`, 'in any folder, also outside Downloads');
+  const stamp = saved.filename.slice('scalable_'.length, -'.zip'.length);
+  const [brokerFile, depositFile] = saved.entries;
+  assert.deepEqual(
+    saved.entries.map((entry) => entry.name),
+    [`scalable-broker_${stamp}.csv`, `scalable-deposit_${stamp}.csv`],
+  );
   assert.equal(find('lfx-status').textContent, '');
-  assert.deepEqual(resultLines(page), [
-    `✅ ${page.background.files()[0].filename} — 2 transazioni del conto broker`,
-    `✅ ${page.background.files()[1].filename.split('/').pop()} — 2 movimenti del conto deposito`,
-  ]);
-  assert.equal(find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Downloads/Reports');
+  assert.equal(find('lfx-progress-label').textContent, 'Scegli dove salvare lo ZIP con i due file');
+  assert.equal(find('lfx-result-archive').textContent, `📦 ${saved.filename}, con:`);
+  assert.deepEqual(resultLines(page), [`✅ ${brokerFile.name} — 2 transazioni del conto broker`, `✅ ${depositFile.name} — 2 movimenti del conto deposito`]);
+  assert.equal(find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents/Finanza');
+  assert.equal(find('lfx-result-show').hidden, false);
+  assert.equal(find('lfx-result-show').textContent, 'Mostra nella cartella');
+  find('lfx-result-show').click();
+  await settle(() => page.background.shown.length === 1);
+  assert.deepEqual(page.background.shown, [saved.id], 'the ZIP is shown in its folder');
   assert.equal(find('lfx-progress').hidden, true, 'the progress bar is shown only while exporting');
   assert.equal(find('lfx-warnings').hidden, true, warningTexts(page).join(' | '));
 
@@ -614,31 +622,14 @@ test('the content scripts export both accounts end to end', async () => {
   assert.deepEqual(page.calls[4].variables, { personId: 'short-123456', savingsAccountId: 'sav-123456', transactionId: 'd1' });
 
   assert.equal(page.anchorDownloads.length, 0, 'saved by the extension, not by the page');
-  const files = page.background.files();
-  assert.equal(files.length, 2);
-  assert.match(files[0].filename, /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
-  assert.match(files[1].filename, /^Reports\/scalable-deposit_.*\.csv$/, 'the second file goes next to the first, inside the download folder');
-  assert.equal(page.background.dialogs, 1, 'one "Save as" window for both files');
-  assert.deepEqual(
-    plain(page.background.saved()).map((saved) => saved.slice(0, saved.lastIndexOf('/'))),
-    ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports'],
-  );
-  assert.deepEqual(
-    plain(page.background.removed),
-    [`/Users/test/Downloads/${files[1].filename.split('/').pop()}`],
-    'the first time, the second file lands in Chrome’s download folder, which shows where that is, and is moved',
-  );
-  assert.equal(page.background.local.downloadRoot, '/Users/test/Downloads');
-  assert.equal(files[0].filename.slice(-23), files[1].filename.slice(-23), 'both files share the time stamp');
-  assert.deepEqual(files.map((file) => [file.saveAs, file.conflictAction]), [[true, 'uniquify'], [false, 'uniquify']]);
 
-  const lines = files[0].text.trimEnd().split('\n');
+  const lines = brokerFile.text.trimEnd().split('\n');
   assert.equal(lines.length, 3);
   assert.ok(lines[0].startsWith('date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency;lf_account;'));
   assert.ok(lines[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0;0;EUR;broker;1;t1;'));
   assert.ok(lines[2].includes(';"Deposit; ""SEPA""";Cash;Deposit;'));
   assert.ok(lines[1].endsWith(';yes;librefolio-exporter/0.1.0;1'));
-  const deposit = files[1].text.trimEnd().split('\n');
+  const deposit = depositFile.text.trimEnd().split('\n');
   assert.equal(deposit.length, 3);
   assert.ok(deposit[1].startsWith('2026-10-01;01:00:00;Executed;"RI-1";"Interest";Cash;Interest;;;;1,23;;0,44;EUR;deposit;1;d1;'), deposit[1]);
   assert.ok(deposit[1].includes(';0.44;1.67;'), 'tax and gross amount of the interest');
@@ -723,7 +714,11 @@ test('a security check on the Transactions page asks the user to open it', async
     'Dettagli tecnici: depositPage: redirect',
   ]);
   assert.deepEqual(callNames(page), [...BROKER_CALLS, 'GET /interest/overnight/sav-123456/transactions/'], 'the redirect is not followed');
-  assert.equal(page.background.files().length, 1);
+  const files = page.background.files();
+  assert.equal(files.length, 1);
+  assert.match(files[0].filename, /^scalable-broker_\S+\.csv$/, 'one account: its CSV, without a ZIP');
+  assert.equal(page.find('lfx-result-archive').hidden, true);
+  assert.deepEqual(Object.keys(page.stored.lastExportDates), ['broker'], 'the overnight account is not exported yet');
 });
 
 test('presets fill the period, and the form survives a page change for the day', async () => {
@@ -803,7 +798,7 @@ test('presets fill the period, and the form survives a page change for the day',
   assert.equal(migrated.find('lfx-last-export').textContent, 'Ultima esportazione: 2026-01-10', 'the former single date covers both accounts');
 });
 
-test('the prefix is the only saving setting: Chrome’s window chooses the folder every time', async () => {
+test('the prefix is the only saving setting; the names shown follow the chosen accounts', async () => {
   const page = loadContentScripts(createPage());
   await openPanel(page);
   const find = page.find;
@@ -811,156 +806,77 @@ test('the prefix is the only saving setting: Chrome’s window chooses the folde
   assert.equal(find('lfx-prefix').hidden, false, 'shown at once, without an edit button');
   assert.equal(find('lfx-save-edit'), null);
   assert.equal(find('lfx-folder'), null, 'no folder setting');
-  assert.equal(find('lfx-ask-where'), null, 'no "ask where" setting');
+  assert.match(textOf(find('lfx-file-name-archive')), /^scalable_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip, con:scalable-broker_\S+\.csvscalable-deposit_\S+\.csv$/);
   assert.match(find('lfx-file-name-broker').textContent, /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
-  assert.match(find('lfx-file-name-deposit').textContent, /^scalable-deposit_\S+\.csv$/);
 
   find('lfx-prefix').type('conto*mio');
   await settle(() => find('lfx-prefix').value === 'contomio');
   assert.equal(page.stored.filePrefix, 'contomio');
-  assert.match(find('lfx-file-name-broker').textContent, /^contomio-broker_\S+\.csv$/);
-  assert.match(find('lfx-file-name-deposit').textContent, /^contomio-deposit_\S+\.csv$/);
+  assert.match(textOf(find('lfx-file-name-archive')), /^contomio_\S+\.zip, con:contomio-broker_\S+\.csvcontomio-deposit_\S+\.csv$/);
 
+  find('lfx-account-broker').click();
+  assert.equal(find('lfx-file-name-archive'), null, 'one account: its CSV, without a ZIP');
+  assert.equal(find('lfx-file-name-broker'), null);
+  assert.match(find('lfx-file-name-deposit').textContent, /^contomio-deposit_\S+\.csv$/);
+  find('lfx-account-deposit').click();
+  assert.equal(find('lfx-file-names').hidden, true, 'no account, no file');
+  find('lfx-account-broker').click();
+  find('lfx-account-deposit').click();
+
+  await acceptRiskAndExport(page);
+  const [saved] = page.background.files();
+  assert.match(saved.filename, /^contomio_\S+\.zip$/);
+  assert.deepEqual(
+    saved.entries.map((entry) => entry.name.split('_')[0]),
+    ['contomio-broker', 'contomio-deposit'],
+  );
+});
+
+test('one account is saved as its own CSV file', async () => {
+  const page = loadContentScripts(createPage());
+  await openPanel(page);
+  page.find('lfx-account-broker').click();
   await acceptRiskAndExport(page);
   const files = page.background.files();
-  assert.match(files[0].filename, /^contomio-broker_/);
-  assert.match(files[1].filename, /^Reports\/contomio-deposit_/);
-  assert.equal(page.background.dialogs, 1);
+  assert.equal(files.length, 1);
+  const [saved] = files;
+  assert.match(saved.filename, /^scalable-deposit_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
+  assert.equal(saved.entries, null);
+  assert.ok(saved.text.startsWith('date;time;status;reference;'));
+  assert.equal(page.find('lfx-progress-label').textContent, 'Scegli dove salvare il file');
+  assert.equal(page.find('lfx-result-archive').hidden, true);
+  assert.equal(page.find('lfx-result').className, 'result');
+  assert.deepEqual(resultLines(page), [`✅ ${saved.filename} — 2 movimenti del conto deposito`]);
+  assert.deepEqual(Object.keys(page.stored.lastExportDates), ['deposit']);
 });
 
-// The broker file is saved first, with Chrome's window; the deposit file follows.
-function savedFolders(background) {
-  return plain(background.saved()).map((saved) => saved.slice(0, saved.lastIndexOf('/')));
-}
-
-test('the second file goes next to the first without a window, whenever Chrome allows it', async () => {
+test('closing the "Save as" window saves nothing, and the accounts do not count as exported', async () => {
   const page = loadContentScripts(createPage());
   await openPanel(page);
-  const background = page.background;
-  await acceptRiskAndExport(page);
-  assert.equal(background.removed.length, 1, 'the first export learns Chrome’s download folder');
-  assert.equal(page.find('lfx-progress-label').textContent, 'Scegli dove salvare: se è dentro Download, l’altro file ci andrà da solo');
-
-  await acceptRiskAndExport(page);
-  assert.equal(background.removed.length, 1, 'then the second file goes straight next to the first');
-  assert.equal(background.dialogs, 2, 'one window per export');
-  assert.deepEqual(savedFolders(background).slice(2), ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports']);
-
-  background.dialogDirectory = '/Users/test/Downloads';
-  await acceptRiskAndExport(page);
-  assert.deepEqual(savedFolders(background).slice(4), ['/Users/test/Downloads', '/Users/test/Downloads'], 'the download folder itself');
-  assert.equal(background.dialogs, 3);
-
-  background.dialogDirectory = '/Users/test/Documents/Finanza';
-  await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 5, 'outside the download folder, Chrome needs a window for each file');
-  assert.equal(background.removed.length, 1, 'and nothing is written in the download folder first');
-  assert.deepEqual(resultLines(page).length, 2);
-  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents/Finanza', 'both chosen in the same folder');
-  assert.equal(
-    page.find('lfx-progress-label').textContent,
-    'Chrome chiede dove salvare anche l’altro file: scegli la stessa cartella',
-    'its window starts in the download folder: the label says where to go',
-  );
-
-  background.dialogDirectory = '/Users/test/Downloads/.private';
-  await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 7, 'a folder name that would not reach Chrome unchanged: a window');
-
-  background.dialogDirectory = '/Users/test/Downloads/Reports';
-  background.refuseNames = /^Reports\//;
-  await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 9, 'a path Chrome refuses: a window');
-  assert.equal(background.removed.length, 1);
-  assert.deepEqual(logged(page, 'save-next').slice(-1), [{ account: 'deposit', how: 'window', state: 'chosen' }]);
-  assert.ok(!JSON.stringify(page.logs).includes('/Users/test'), 'folders are never logged');
-});
-
-test('with Chrome set to ask where to save each file, each file has its window and none is moved', async () => {
-  const page = loadContentScripts(createPage());
-  await openPanel(page);
-  const background = page.background;
-  background.askEveryFile = true;
-  background.windowPolls = 40;
-  await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 2);
-  assert.deepEqual(background.removed, [], 'a file saved through a window is never moved');
-  assert.deepEqual(savedFolders(background), ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports']);
-  assert.equal(resultLines(page).length, 2);
-  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Downloads/Reports');
-  assert.equal(background.local.downloadRoot, undefined, 'nothing learnt from a window');
-});
-
-test('closing a window saves nothing more, and only saved accounts count as exported', async () => {
-  const page = loadContentScripts(createPage());
-  await openPanel(page);
-  const background = page.background;
-  background.dialogCancels = true;
+  page.background.dialogCancels = true;
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-status').textContent, 'Salvataggio annullato: nessun file scritto.');
   assert.equal(page.find('lfx-result').hidden, true);
-  assert.deepEqual(background.saved(), []);
+  assert.equal(page.find('lfx-result-show').hidden, true);
+  assert.deepEqual(page.background.files(), []);
   assert.equal(page.stored.lastExportDates, undefined);
 
-  background.dialogCancels = 3;
-  background.dialogDirectory = '/Users/test/Documents';
+  page.background.dialogCancels = false;
+  page.background.windowPolls = 30;
   await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 3, 'the deposit file had its own window, closed by the user');
-  assert.equal(page.find('lfx-status').textContent, '');
-  assert.deepEqual(resultLines(page).map((line) => line.split(' — ')[1]), ['2 transazioni del conto broker']);
-  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents');
-  assert.deepEqual(Object.keys(page.stored.lastExportDates), ['broker'], 'the deposit is not exported yet');
-});
-
-test('a changed download folder is learnt again from where the file lands', async () => {
-  const page = loadContentScripts(createPage());
-  await openPanel(page);
-  const background = page.background;
-  const week = 7 * 24 * 60 * 60 * 1000;
-  Object.assign(background.local, { downloadRoot: '/Users/test/Old', downloadRootCheckedAt: background.clock });
-  background.dialogDirectory = '/Users/test/Old/Reports';
-  await acceptRiskAndExport(page);
-  assert.equal(background.local.downloadRoot, '/Users/test/Downloads', 'the file landed in the new download folder');
-  assert.equal(background.removed.length, 1, 'and was taken away from there');
-  assert.equal(background.dialogs, 2, 'the chosen folder is outside the new download folder: a window');
-
-  background.dialogDirectory = '/Users/test/Downloads/Reports';
-  Object.assign(background.local, { downloadRoot: '/Users/test/Old', downloadRootCheckedAt: background.clock });
-  await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 4, 'outside the known folder, checked recently: a window at once');
-  assert.equal(background.removed.length, 1);
-
-  background.local.downloadRootCheckedAt = background.clock - week;
-  await acceptRiskAndExport(page);
-  assert.equal(background.dialogs, 5, 'checked again after a week: one window');
-  assert.equal(background.local.downloadRoot, '/Users/test/Downloads');
-  assert.deepEqual(savedFolders(background).slice(-2), ['/Users/test/Downloads/Reports', '/Users/test/Downloads/Reports']);
-});
-
-test('paths below the download folder are compared as Chrome reports them', () => {
-  const { relativeFolder, rootFrom, sameDirectory } = createBackground().context;
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/'), '');
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/LibreFolio/2026'), 'LibreFolio/2026');
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads2/x'), null);
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Documents'), null);
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/a/b/c/d/e/f'), null, 'deeper than Chrome’s paths here');
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/Esportazioni  2026'), null, 'a name that would change');
-  assert.equal(relativeFolder('/Users/t/Downloads', '/Users/t/Downloads/Spese e\u0301'), 'Spese \u00e9');
-  assert.equal(relativeFolder('C:\\Users\\T\\Downloads', 'c:\\users\\t\\downloads\\Export'), 'Export');
-  assert.equal(relativeFolder('', '/Users/t/Downloads'), null);
-  assert.equal(rootFrom('/Users/t/Downloads/LibreFolio/2026', 'LibreFolio/2026'), '/Users/t/Downloads');
-  assert.equal(rootFrom('/Users/t/Downloads', ''), '/Users/t/Downloads');
-  assert.equal(rootFrom('/Users/t/Other', 'LibreFolio'), '');
-  assert.equal(rootFrom('C:\\D\\Export', 'export'), 'C:\\D');
-  assert.equal(sameDirectory('/Users/t/Spese e\u0301', '/Users/t/Spese \u00e9/'), true);
-  assert.equal(sameDirectory('/Users/t/a', '/Users/t/A'), false);
-  assert.equal(sameDirectory('C:\\Users\\T', 'c:\\users\\t'), true);
+  assert.equal(page.background.files().length, 1, 'saved once the user chooses, however long the window stays open');
+  assert.deepEqual(Object.keys(page.stored.lastExportDates).sort(), ['broker', 'deposit']);
+  assert.deepEqual(logged(page, 'save'), [
+    { file: 'zip', state: 'cancelled' },
+    { file: 'zip', state: 'chosen' },
+  ]);
+  assert.ok(!JSON.stringify(page.logs).includes('/Users/test'), 'folders are never logged');
 });
 
 test('a save failure is reported, and without the extension the page saves the files', async () => {
   const page = loadContentScripts(createPage());
   await openPanel(page);
-  page.override = (message) => (message.type === 'lfx:save-first' ? { ok: false, error: 'disk full' } : undefined);
+  page.override = (message) => (message.type === 'lfx:save-as' ? { ok: false, error: 'disk full' } : undefined);
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-status').className, 'status error');
   assert.equal(page.find('lfx-result').hidden, true);
@@ -968,158 +884,24 @@ test('a save failure is reported, and without the extension the page saves the f
   assert.equal(page.stored.lastExportDates, undefined, 'a failed save is not a done export');
 
   page.override = (message) => {
-    if (message.type === 'lfx:save-first') throw new Error('Extension context invalidated.');
+    if (message.type === 'lfx:save-as') throw new Error('Extension context invalidated.');
     return undefined;
   };
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-result').hidden, false);
   assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: Download');
-  assert.equal(page.anchorDownloads.length, 2);
-  assert.match(page.anchorDownloads[0].name, /^scalable-broker_/);
-  assert.match(await page.blobs.get(page.anchorDownloads[1].url).text(), /^date;time;status;/);
-  assert.deepEqual(logged(page, 'download-fallback'), [{ reason: 'no answer from the extension' }]);
-});
-
-// A folder chosen in Chrome's picker, in memory: files[name] = text. taken(name) marks the
-// names already in the folder; permission is the answer to Chrome's permission prompt.
-function fakeFolder(name, options = {}) {
-  const failure = (errorName) => Object.assign(new Error(errorName), { name: errorName });
-  const folder = {
-    kind: 'directory',
-    name,
-    files: {},
-    permission: options.permission || 'granted',
-    permissionRequests: 0,
-    queryPermission: async () => (folder.permission === 'granted' ? 'granted' : 'prompt'),
-    requestPermission: async () => {
-      folder.permissionRequests++;
-      return folder.permission;
-    },
-    getFileHandle: async (fileName, settings = {}) => {
-      const exists = fileName in folder.files || Boolean(options.taken && options.taken(fileName));
-      if (!exists && !settings.create) throw failure('NotFoundError');
-      return {
-        kind: 'file',
-        name: fileName,
-        createWritable: async () => {
-          if (options.failWrite) throw failure('NotAllowedError');
-          let text = '';
-          return {
-            write: async (data) => {
-              text += data;
-            },
-            close: async () => {
-              folder.files[fileName] = text;
-            },
-            abort: async () => {},
-          };
-        },
-      };
-    },
-  };
-  return folder;
-}
-
-const PICKER_OPTIONS = { id: 'librefolio-exporter', mode: 'readwrite', startIn: 'downloads' };
-const PICK_LABEL =
-  'Scegli la cartella, per esempio Download/LibreFolio (Download, Documenti e Scrivania in sé non sono ammessi). Chrome chiede il permesso a nome di questa pagina: è l’estensione a scrivere i file.';
-
-// A page with Chrome's folder picker: answer() is what the picker gives; picks records each
-// opening, with the requests already sent to Scalable and the label shown.
-function pageWithPicker(answer) {
-  const picks = [];
-  const page = loadContentScripts(
-    createPage({
-      picker: async (options) => {
-        picks.push({ options: plain(options), requestsBefore: page.calls.length, label: page.find('lfx-progress-label').textContent });
-        return answer();
-      },
-    }),
+  assert.equal(page.find('lfx-result-show').hidden, true, 'saved by the page: nothing to show');
+  assert.equal(page.anchorDownloads.length, 1);
+  assert.match(page.anchorDownloads[0].name, /^scalable_\S+\.zip$/);
+  const blob = page.blobs.get(page.anchorDownloads[0].url);
+  assert.equal(blob.type, 'application/zip');
+  const entries = unzip(Buffer.from(await blob.arrayBuffer()));
+  assert.deepEqual(
+    entries.map((entry) => entry.name.split('_')[0]),
+    ['scalable-broker', 'scalable-deposit'],
   );
-  page.picks = picks;
-  return page;
-}
-
-test('with Chrome’s folder picker, the folder is chosen at the click and both files are written there', async () => {
-  const folder = fakeFolder('Esportazioni');
-  const page = pageWithPicker(async () => folder);
-  await openPanel(page);
-  await acceptRiskAndExport(page);
-  assert.deepEqual(page.picks, [{ options: PICKER_OPTIONS, requestsBefore: 0, label: PICK_LABEL }], 'before anything is read: Chrome opens it only right after the click');
-  const names = Object.keys(folder.files).sort();
-  assert.equal(names.length, 2);
-  assert.match(names[0], /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
-  assert.match(names[1], /^scalable-deposit_\S+\.csv$/);
-  assert.ok(folder.files[names[0]].startsWith('date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency;lf_account;'));
-  assert.ok(folder.files[names[1]].includes(';deposit;'));
-  assert.equal(page.background.downloads.length, 0, 'Chrome’s downloads are not used');
-  assert.deepEqual(resultLines(page), [`✅ ${names[0]} — 2 transazioni del conto broker`, `✅ ${names[1]} — 2 movimenti del conto deposito`]);
-  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: Esportazioni');
-  assert.deepEqual(Object.keys(page.stored.lastExportDates).sort(), ['broker', 'deposit']);
-  assert.deepEqual(logged(page, 'folder-picker'), [{ permission: 'granted' }]);
-  assert.deepEqual(logged(page, 'folder-write'), [{ files: 2 }]);
-  assert.ok(!JSON.stringify(page.logs).includes('Esportazioni'), 'the folder is never logged');
-});
-
-test('closing the folder picker, or refusing Chrome’s permission, exports nothing', async () => {
-  const aborted = pageWithPicker(async () => {
-    throw Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
-  });
-  await openPanel(aborted);
-  await acceptRiskAndExport(aborted);
-  assert.equal(aborted.find('lfx-status').textContent, 'Nessuna cartella scelta: niente esportato.');
-  assert.deepEqual(aborted.calls, [], 'nothing is read');
-  assert.equal(aborted.find('lfx-result').hidden, true);
-  assert.equal(aborted.stored.lastExportDates, undefined);
-  assert.deepEqual(logged(aborted, 'folder-picker'), [{ error: 'AbortError' }]);
-
-  const folder = fakeFolder('Esportazioni', { permission: 'denied' });
-  const denied = pageWithPicker(async () => folder);
-  await openPanel(denied);
-  await acceptRiskAndExport(denied);
-  assert.equal(denied.find('lfx-status').textContent, 'Chrome non ha il permesso di scrivere in quella cartella: niente esportato.');
-  assert.equal(folder.permissionRequests, 1, 'asked once more, still right after the click');
-  assert.deepEqual(denied.calls, []);
-  assert.deepEqual(folder.files, {});
-});
-
-test('a name already in the folder gets a number, and a failed write is reported', async () => {
-  const folder = fakeFolder('Esportazioni', { taken: (name) => /^scalable-broker_\S+\.csv$/.test(name) });
-  const page = pageWithPicker(async () => folder);
-  await openPanel(page);
-  await acceptRiskAndExport(page);
-  const broker = Object.keys(folder.files).find((name) => name.startsWith('scalable-broker_'));
-  assert.match(broker, /^scalable-broker_\S+ \(1\)\.csv$/);
-  assert.equal(resultLines(page)[0], `✅ ${broker} — 2 transazioni del conto broker`, 'the list shows the name written');
-
-  const failing = fakeFolder('Esportazioni', { failWrite: true });
-  const failed = pageWithPicker(async () => failing);
-  await openPanel(failed);
-  await acceptRiskAndExport(failed);
-  assert.equal(failed.find('lfx-status').className, 'status error');
-  assert.match(failed.find('lfx-status').textContent, /^Salvataggio dei file non riuscito: /);
-  assert.equal(failed.find('lfx-result').hidden, true);
-  assert.equal(failed.stored.lastExportDates, undefined, 'nothing written: not exported');
-  assert.deepEqual(logged(failed, 'folder-write'), [{ account: 'broker', error: 'NotAllowedError' }]);
-});
-
-test('when the folder picker cannot open, Chrome’s "Save as" window is used', async () => {
-  const page = pageWithPicker(async () => {
-    throw Object.assign(new Error('Must be handling a user gesture to show a file picker.'), { name: 'SecurityError' });
-  });
-  await openPanel(page);
-  await acceptRiskAndExport(page);
-  assert.equal(page.background.dialogs, 1, 'one "Save as" window, as without the picker');
-  assert.equal(page.background.files().length, 2);
-  assert.equal(resultLines(page).length, 2);
-  assert.deepEqual(logged(page, 'folder-picker'), [{ error: 'SecurityError' }]);
-
-  const automated = pageWithPicker(async () => fakeFolder('X'));
-  automated.stored.saveDialog = false;
-  await openPanel(automated);
-  await acceptRiskAndExport(automated);
-  assert.deepEqual(automated.picks, [], 'automated tests, without windows, skip the picker');
-  assert.equal(automated.background.files().length, 2);
+  assert.match(entries[1].text, /^date;time;status;/);
+  assert.deepEqual(logged(page, 'download-fallback'), [{ reason: 'no answer from the extension' }]);
 });
 
 // Chrome cuts the script of an open page off from a reloaded extension: no id, every call fails.
@@ -1195,17 +977,36 @@ test('the background merges ids per person, drops invalid ones and keeps five ac
 
 test('the background saves files only within its limits', async () => {
   const background = createBackground();
-  const download = async (files, folder) => plain(await background.send({ type: 'lfx:download', files, folder, saveAs: false }));
-  const file = (name, content) => ({ name, content });
+  const download = async (files, folder) => plain(await background.send({ type: 'lfx:download', files, folder }));
+  const csv = (name, text) => ({ name, dataUrl: filesApi.toDataUrl(text) });
 
   assert.deepEqual(await download([]), { ok: false, error: 'invalid file list' });
-  assert.deepEqual(await download(Array.from({ length: 5 }, (_, index) => file(`f${index}.csv`, 'x'))), { ok: false, error: 'invalid file list' });
+  assert.deepEqual(await download(Array.from({ length: 5 }, (_, index) => csv(`f${index}.csv`, 'x'))), { ok: false, error: 'invalid file list' });
   assert.deepEqual(await download([{ name: 'a.csv' }]), { ok: false, error: 'invalid file' });
-  assert.deepEqual(await download([file('a.csv', 'x'), file('b.csv', 'x'.repeat(2 * 1024 * 1024))]), { ok: false, error: 'file too large' });
+  assert.deepEqual(await download([{ name: 'a.csv', dataUrl: 'https://example.com/a.csv' }]), { ok: false, error: 'invalid file' }, 'only data URLs built by the extension');
+  assert.deepEqual(await download([{ name: 'a.html', dataUrl: 'data:text/html;base64,PGI+' }]), { ok: false, error: 'invalid file' });
+  const tooLarge = { name: 'b.csv', dataUrl: `data:text/csv;charset=utf-8;base64,${'A'.repeat(2 * 1024 * 1024)}` };
+  assert.deepEqual(await download([csv('a.csv', 'x'), tooLarge]), { ok: false, error: 'invalid file' });
   assert.equal(background.downloads.length, 0, 'nothing is saved when one file is refused');
 
-  assert.deepEqual(await download([file('../a?.csv', 'x;y\n')], '../../Mie/Esportazioni'), { ok: true, count: 1 });
-  assert.deepEqual(plain(background.files()), [{ filename: 'Mie/Esportazioni/a.csv', saveAs: false, conflictAction: 'uniquify', text: 'x;y\n' }]);
+  const answer = await download([csv('../a?.csv', 'x;y\n')], '../../Mie/Esportazioni');
+  assert.deepEqual(answer, { ok: true, ids: [1] });
+  assert.deepEqual(
+    background.files().map((file) => [file.filename, file.saveAs, file.conflictAction, file.text]),
+    [['Mie/Esportazioni/a.csv', false, 'uniquify', 'x;y\n']],
+  );
+});
+
+test('the background shows only its own saved files in their folder', async () => {
+  const background = createBackground();
+  const { ids } = plain(await background.send({ type: 'lfx:download', files: [{ name: 'a.zip', dataUrl: filesApi.zipDataUrl(new Uint8Array([80, 75, 5, 6])) }], folder: '' }));
+  assert.deepEqual(plain(await background.send({ type: 'lfx:show-download', id: ids[0] })), { ok: true });
+  assert.deepEqual(background.shown, [ids[0]]);
+  assert.deepEqual(plain(await background.send({ type: 'lfx:show-download', id: 99 })), { ok: false });
+  assert.deepEqual(plain(await background.send({ type: 'lfx:show-download', id: '1' })), { ok: false });
+  background.items.get(ids[0]).byExtensionId = 'another-extension';
+  assert.deepEqual(plain(await background.send({ type: 'lfx:show-download', id: ids[0] })), { ok: false }, 'not a download of another extension');
+  assert.deepEqual(background.shown, [ids[0]]);
 });
 
 test('the background answers only this extension, and only known messages', async () => {
@@ -1296,9 +1097,8 @@ test('files keep their names when another extension renames downloads', async ()
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-result').hidden, false);
   const names = background.files().map((file) => file.filename);
-  assert.equal(names.length, 2);
-  assert.match(names[0], /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
-  assert.match(names[1], /^Reports\/scalable-deposit_/);
+  assert.equal(names.length, 1);
+  assert.match(names[0], /^scalable_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$/);
 
   const listener = background.nameListeners[0];
   let suggested = 'not asked';

@@ -101,51 +101,14 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   return undefined;
 });
 
-async function downloadFiles(message) {
-  const files = Array.isArray(message.files) ? message.files : [];
-  if (files.length === 0 || files.length > MAX_FILES) throw new Error('invalid file list');
-  for (const file of files) {
-    if (!file || typeof file.name !== 'string' || typeof file.content !== 'string') throw new Error('invalid file');
-    if (!self.LFX.files.fitsDataUrl(file.content)) throw new Error('file too large');
-  }
-  for (const file of files) {
-    const url = self.LFX.files.toDataUrl(file.content);
-    const filename = self.LFX.files.downloadPath(message.folder, file.name);
-    pendingNames.set(url, filename);
-    setTimeout(() => {
-      if (pendingNames.get(url) === filename) pendingNames.delete(url);
-    }, NAME_TIMEOUT_MS);
-    try {
-      await chrome.downloads.download({ url, filename, saveAs: message.saveAs === true, conflictAction: 'uniquify' });
-    } catch (error) {
-      pendingNames.delete(url);
-      throw error;
-    }
-  }
-  return { ok: true, count: files.length };
-}
-
-// Saving with one "Save as" window: the first file is saved where the user chooses, the
-// others next to it. Chrome saves without a window only inside its download folder, given a
-// path relative to it, and does not tell extensions where that folder is: it is learnt from
-// where a file saved there lands, kept, and learnt again when Chrome's setting changes.
-const ROOT_KEY = 'downloadRoot';
-const ROOT_CHECKED_KEY = 'downloadRootCheckedAt';
-// A folder outside the known download folder: Chrome's setting may have changed since, and
-// the download folder is learnt again at most this often.
-const ROOT_RECHECK_MS = 7 * 24 * 60 * 60 * 1000;
-const POLL_MS = 100;
-// Without a window Chrome names a file at once. Still unnamed after this, the file has its
-// window open (Chrome's "ask where to save each file" setting): the user chooses.
-const WINDOW_AFTER_MS = 2000;
-const COMPLETE_WAIT_MS = 10000;
-
+// One file per export: the CSV of one account, or a ZIP with both. Only the data URLs that
+// the content scripts build are downloaded (files.isDownloadUrl).
 function validFile(file) {
-  return Boolean(file) && typeof file.name === 'string' && typeof file.content === 'string' && self.LFX.files.fitsDataUrl(file.content);
+  return Boolean(file) && typeof file.name === 'string' && self.LFX.files.isDownloadUrl(file.dataUrl);
 }
 
 async function startDownload(file, filename, saveAs) {
-  const url = self.LFX.files.toDataUrl(file.content);
+  const url = file.dataUrl;
   pendingNames.set(url, filename);
   setTimeout(() => {
     if (pendingNames.get(url) === filename) pendingNames.delete(url);
@@ -158,19 +121,19 @@ async function startDownload(file, filename, saveAs) {
   }
 }
 
+// Without a window, into the download folder: only for automated tests (saveDialog: false).
+async function downloadFiles(message) {
+  const files = Array.isArray(message.files) ? message.files : [];
+  if (files.length === 0 || files.length > MAX_FILES) throw new Error('invalid file list');
+  if (!files.every(validFile)) throw new Error('invalid file');
+  const ids = [];
+  for (const file of files) ids.push(await startDownload(file, self.LFX.files.downloadPath(message.folder, file.name), false));
+  return { ok: true, ids };
+}
+
 async function findDownload(id) {
   const items = await chrome.downloads.search({ id });
   return items && items[0] ? items[0] : null;
-}
-
-// Polls a download until ready(item), or until it is no longer in progress.
-async function waitForDownload(id, ready, timeoutMs) {
-  const end = Date.now() + timeoutMs;
-  for (;;) {
-    const item = await findDownload(id);
-    if (!item || item.state !== 'in_progress' || ready(item) || Date.now() >= end) return item;
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-  }
 }
 
 function directoryOf(path) {
@@ -178,120 +141,14 @@ function directoryOf(path) {
   return cut > 0 ? path.slice(0, cut) : '';
 }
 
-function isWindowsPath(path) {
-  return /^[A-Za-z]:[\\/]|^\\\\/.test(path);
-}
-
-// A path as compared: one Unicode form, no trailing separator, any case on Windows.
-function comparable(path, windows) {
-  const text = path.normalize('NFC').replace(/[\\/]+$/, '');
-  return windows ? text.toLowerCase() : text;
-}
-
-function sameDirectory(a, b) {
-  const windows = isWindowsPath(a) || isWindowsPath(b);
-  return comparable(a, windows) === comparable(b, windows);
-}
-
-// The folder below the download folder, as the relative path Chrome takes; null when it is
-// outside, or when its name would not reach Chrome unchanged.
-function relativeFolder(root, directory) {
-  if (!root || !directory) return null;
-  const windows = isWindowsPath(root);
-  const base = comparable(root, windows);
-  const target = comparable(directory, windows);
-  const original = directory.normalize('NFC').replace(/[\\/]+$/, '');
-  if (target === base) return '';
-  if (target.length !== original.length || !target.startsWith(base) || !/[\\/]/.test(target.charAt(base.length))) return null;
-  const folder = original
-    .slice(base.length + 1)
-    .split(/[\\/]+/)
-    .filter(Boolean)
-    .join('/');
-  return self.LFX.files.sanitizeFolder(folder) === folder ? folder : null;
-}
-
-// The download folder, from where a file saved into its subfolder `folder` landed; '' when
-// the path does not end with that subfolder.
-function rootFrom(directory, folder) {
-  const windows = isWindowsPath(directory);
-  let root = directory.replace(/[\\/]+$/, '');
-  for (const part of (folder ? folder.split('/') : []).reverse()) {
-    const cut = Math.max(root.lastIndexOf('/'), root.lastIndexOf('\\'));
-    if (cut <= 0 || comparable(root.slice(cut + 1), windows) !== comparable(part, windows)) return '';
-    root = root.slice(0, cut);
-  }
-  return root;
-}
-
-// Removes a file this extension has just saved in the wrong folder, with its download entry.
-async function discard(id) {
-  const item = await waitForDownload(id, () => false, COMPLETE_WAIT_MS);
-  try {
-    if (item && item.state === 'complete') await chrome.downloads.removeFile(id);
-    else if (item && item.state === 'in_progress') await chrome.downloads.cancel(id);
-  } catch (error) {
-    // Already removed.
-  }
-  try {
-    await chrome.downloads.erase({ id });
-  } catch (error) {
-    // Only the download list entry.
-  }
-}
-
-async function saveWithWindow(file) {
-  return { window: await startDownload(file, self.LFX.files.downloadPath('', file.name), true) };
-}
-
-// Where a file saved without a window landed, as { id, directory }; { window } when Chrome
-// opened its window anyway, null when Chrome refused the path.
-async function saveWithoutWindow(file, folder) {
-  let id;
-  try {
-    id = await startDownload(file, self.LFX.files.downloadPath(folder, file.name), false);
-  } catch (error) {
-    return null;
-  }
-  const item = await waitForDownload(id, (entry) => Boolean(entry.filename), WINDOW_AFTER_MS);
-  if (item && item.state === 'interrupted' && item.error !== 'USER_CANCELED') throw new Error(item.error || 'download failed');
-  if (item && item.filename && item.state !== 'interrupted') return { id, directory: directoryOf(item.filename) };
-  return { window: id };
-}
-
-async function rememberRoot(root) {
-  if (root) await chrome.storage.local.set({ [ROOT_KEY]: root, [ROOT_CHECKED_KEY]: Date.now() });
-  else await chrome.storage.local.remove([ROOT_KEY, ROOT_CHECKED_KEY]);
-}
-
-// One of the other files, next to the first one: without a window whenever Chrome allows it.
-// The answer is { directory } when saved there, { window } when the user chooses in a window.
-async function saveBeside(file, directory) {
-  const stored = await chrome.storage.local.get({ [ROOT_KEY]: '', [ROOT_CHECKED_KEY]: 0 });
-  let folder = stored[ROOT_KEY] ? relativeFolder(stored[ROOT_KEY], directory) : '';
-  if (folder === null && !(Date.now() - stored[ROOT_CHECKED_KEY] < ROOT_RECHECK_MS)) folder = '';
-  for (let attempt = 0; attempt < 2 && folder !== null; attempt++) {
-    const saved = await saveWithoutWindow(file, folder);
-    if (!saved) break;
-    if (saved.window !== undefined) return saved;
-    const root = rootFrom(saved.directory, folder);
-    await rememberRoot(root);
-    if (sameDirectory(saved.directory, directory)) return { directory };
-    // Elsewhere: Chrome's download folder is not the known one, and this file shows which.
-    await discard(saved.id);
-    folder = root ? relativeFolder(root, directory) : null;
-  }
-  return saveWithWindow(file);
-}
-
-// The first file, with Chrome's "Save as" window.
-async function saveFirst(message) {
+// The file, with Chrome's "Save as" window: any folder.
+async function saveWithWindow(message) {
   if (!validFile(message.file)) throw new Error('invalid file');
   const id = await startDownload(message.file, self.LFX.files.downloadPath('', message.file.name), true);
   return { ok: true, id };
 }
 
-// Where a file with a window went: pending while the window is open.
+// Where the file went: pending while the window is open.
 async function downloadState(message) {
   if (typeof message.id !== 'number') return { state: 'failed' };
   const item = await findDownload(message.id);
@@ -301,15 +158,13 @@ async function downloadState(message) {
   return { state: 'chosen', directory: directoryOf(item.filename) };
 }
 
-// The other files, next to the first one.
-async function saveNext(message) {
-  const files = Array.isArray(message.files) ? message.files : [];
-  if (files.length === 0 || files.length >= MAX_FILES || !files.every(validFile)) throw new Error('invalid file list');
-  const directory = typeof message.directory === 'string' ? message.directory : '';
-  if (!directory) throw new Error('invalid folder');
-  const results = [];
-  for (const file of files) results.push(await saveBeside(file, directory));
-  return { ok: true, files: results };
+// A file saved by this extension, shown in its folder (Finder, Explorer).
+async function showDownload(message) {
+  if (typeof message.id !== 'number') return { ok: false };
+  const item = await findDownload(message.id);
+  if (!item || item.byExtensionId !== chrome.runtime.id) return { ok: false };
+  chrome.downloads.show(message.id);
+  return { ok: true };
 }
 
 async function personKey(personId) {
@@ -424,9 +279,9 @@ function queueRemember(message) {
 const HANDLERS = {
   'lfx:update-status': (message) => updateStatus(message.force === true),
   'lfx:download': (message) => downloadFiles(message),
-  'lfx:save-first': (message) => saveFirst(message),
+  'lfx:save-as': (message) => saveWithWindow(message),
   'lfx:download-state': (message) => downloadState(message),
-  'lfx:save-next': (message) => saveNext(message),
+  'lfx:show-download': (message) => showDownload(message),
   'lfx:remember-ids': (message) => queueRemember(message),
   'lfx:recall-ids': (message) => recallIds(message),
 };

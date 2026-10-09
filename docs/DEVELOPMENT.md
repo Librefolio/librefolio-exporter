@@ -25,19 +25,17 @@ of real tests. With `SHOTS_DIR=<folder>` it also saves screenshots of the button
 the panel; with `EXTENSION_DIR=<folder>` it loads another copy of the extension, such as
 the unzipped release ZIP.
 
-A headless browser cannot show the *Save as* window or the folder picker. The first
-export turns both off through a hidden setting, `saveDialog: false` in
-`chrome.storage.local`, so that the files go straight into the download folder. The
-second export checks that the content scripts' world has `showDirectoryPicker`, then
-replaces it there with a folder of the page's private file system (OPFS): the extension
-writes through Chrome's own File System Access code, and the test reads the files back.
+A headless browser cannot show the *Save as* window: the test turns it off through a
+hidden setting, `saveDialog: false` in `chrome.storage.local`, so that the export goes
+straight into the download folder. The test reads the ZIP back with `tests/unzip.js`,
+and checks it with the system `unzip -t` where installed.
 
 ## 🗂️ Structure
 
 | Path | Content |
 |---|---|
 | `manifest.json` | Manifest V3 |
-| `src/shared/` | Number and date helpers, CSV writer, file names and download payloads, version comparison, UI strings (en, it, fr, es) |
+| `src/shared/` | Number and date helpers, CSV writer, ZIP writer (`zip.js`), file names and download payloads, version comparison, UI strings (en, it, fr, es) |
 | `src/brokers/scalable/` | GraphQL queries, client, reader of the data embedded in the pages (`flight.js`), identifier discovery, CSV mapping, export orchestration |
 | `src/content/` | Floating button and panel (`ui.js`), entry point (`main.js`), logo (`logo.js`, generated from `icons/icon-48.png` by `node scripts/build-logo.js`) |
 | `src/background.js` | Downloads (one *Save as* window, the download folder learnt), identifiers seen on the pages, update check |

@@ -39,49 +39,21 @@ while you move between pages, for the current day.
 
 ## 💾 Saving
 
-Under *Saving* you can change the start of the file names (`scalable` by default). At
-the end, a green list shows each saved file, what it contains and its folder. An account
-counts as exported only once its file is saved.
-
-### 📂 With the folder picker (Chrome, Edge)
-
-- When you click **Export CSV**, Chrome's folder picker opens at once: a page may open it
-  only within a few seconds of a click, so the folder comes before the transactions are
-  read. It opens in the last folder chosen; the first time, in Downloads.
-- Chrome does not accept the home, Desktop, Documents and Downloads folders themselves,
-  only folders inside them, such as `Downloads/LibreFolio`: it warns you and opens the
-  picker again. This is a Chrome rule against giving a site a whole personal folder.
-- Chrome then asks for permission to edit files in that folder, on behalf of the Scalable
-  page: the extension runs inside the page, so Chrome names the page. The permission lasts
-  until you close the last Scalable tab, and a folder icon in the address bar can remove
-  it. The extension never stores the folder, so the page itself never gets it.
-- Both files are written there. A name already taken gets a number, as with downloads:
-  `… (1).csv`.
-- If you close the picker or refuse the permission, nothing is read and nothing is
-  written.
-
-### 💾 With Chrome's *Save as* window (Brave, or when the picker cannot open)
-
-Brave turns the folder picker off (`brave://flags/#file-system-access-api` turns it on):
-the files then go through the browser's downloads, at the end of the export.
-
-- Chrome's *Save as* window opens once per export, for the first file.
-- The other file goes into the same folder without a window when that folder is
-  Chrome's download folder or one of its subfolders: Chrome lets extensions save without
-  a window only there.
-- Chrome does not tell extensions where its download folder is. The first time, the
-  extension saves the second file there, sees where it lands and, if needed, moves it
-  next to the first one; then it remembers the folder. When you save outside it, the
-  extension checks at most once a week whether Chrome's setting has changed.
-- Outside the download folder, or when Chrome is set to *Ask where to save each file*,
-  Chrome opens its window for the second file too: choose the same folder. Chrome starts
-  that window in its download folder, as it does for every file named by an extension.
-  A file saved through a window is never moved.
-- A file larger than about 2 MB is saved by the page itself, into the download folder.
+- Each export is one file, saved with Chrome's *Save as* window, in any folder: the CSV
+  file of the account or, with both accounts, one ZIP holding the two CSV files. One file
+  needs one window, wherever you save it.
+- Double-click the ZIP to extract it (*Extract all* on Windows). **Show in Finder**
+  (*Show in folder* elsewhere), at the end of the export, opens its folder. The extension
+  cannot extract it by itself: writing files outside the download folder would need
+  Chrome's permission to edit files on your computer.
+- Under *Saving* you can change the start of the file names (`scalable` by default); the
+  panel shows the names of the next export.
+- A file larger than about 2 MB is saved by the page itself, into the download folder;
+  rare, since the ZIP is compressed.
 - Files keep their names even when another extension renames downloads.
 
-If you close a *Save as* window, that file is not saved and its account does not count
-as exported.
+At the end, a green list shows the file, the CSV files it holds and its folder. If you
+close the *Save as* window, nothing is saved and the accounts do not count as exported.
 
 ## 🔄 Update check
 
@@ -98,7 +70,7 @@ works again later.
 |---|---|
 | Access to `*.scalable.capital` (content script) | Show the button and read your transactions from the web app. The login (`secure.scalable.capital`) and MCP hosts are excluded. |
 | `storage` | Remember your settings, the date of each account's last export, the update-check result, the portfolio and overnight accounts seen on the pages and the location of the download folder; until the browser closes, the query of the overnight account's list. |
-| `downloads` | Save the CSV files when the folder picker is not available: the first with Chrome's *Save as* window, the other next to it. To find the download folder, the extension looks at where its own files land, and removes a file of its own that landed in the wrong folder. It also gives its own files their names when another extension renames downloads. It leaves other downloads untouched. The folder picker itself needs no permission: Chrome asks you at each export. |
+| `downloads` | Save the export with Chrome's *Save as* window and, when you click **Show in Finder**, show it in its folder. The extension also gives its own files their names when another extension renames downloads. It leaves other downloads untouched. |
 
 No other host and no other permission. At install time Chrome warns that the extension
 can read and change data on `scalable.capital` sites and manage your downloads: that is

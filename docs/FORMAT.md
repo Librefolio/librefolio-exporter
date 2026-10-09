@@ -2,7 +2,9 @@
 
 Format version **1** (`lf_format` = `1`). One file per account:
 `<prefix>-broker_<timestamp>.csv` and `<prefix>-deposit_<timestamp>.csv`, where the
-prefix is `scalable` unless the user changes it.
+prefix is `scalable` unless the user changes it. When both accounts are exported
+together, the two files come in one ZIP, `<prefix>_<timestamp>.zip`, with the same names
+inside.
 
 ## Conventions
 

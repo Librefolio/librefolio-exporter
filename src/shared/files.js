@@ -6,10 +6,11 @@
   'use strict';
 
   const DEFAULT_PREFIX = 'scalable';
-  const DEFAULT_FOLDER = 'LibreFolio';
-  const DATA_URL_PREFIX = 'data:text/csv;charset=utf-8;base64,';
+  const CSV_DATA_URL_PREFIX = 'data:text/csv;charset=utf-8;base64,';
+  const ZIP_DATA_URL_PREFIX = 'data:application/zip;base64,';
   // Chrome refuses longer URLs; a larger file is saved from the page instead.
   const MAX_DATA_URL_LENGTH = 2 * 1024 * 1024 - 1024;
+  const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
   const FORBIDDEN = /[\\/:*?"<>|\u0000-\u001f\u007f]/g;
 
   function cleanSegment(text, maxLength) {
@@ -36,9 +37,10 @@
       .join('/');
   }
 
+  // One CSV per account; both accounts together are saved as one ZIP holding the two CSVs.
   function fileNames(prefix, stamp) {
     const start = sanitizePrefix(prefix);
-    return { broker: `${start}-broker_${stamp}.csv`, deposit: `${start}-deposit_${stamp}.csv` };
+    return { broker: `${start}-broker_${stamp}.csv`, deposit: `${start}-deposit_${stamp}.csv`, archive: `${start}_${stamp}.zip` };
   }
 
   function downloadPath(folder, name) {
@@ -47,31 +49,40 @@
     return directory ? `${directory}/${file}` : file;
   }
 
-  // data: URL with the UTF-8 bytes of the text, for chrome.downloads.
-  function toDataUrl(content) {
-    const bytes = new TextEncoder().encode(String(content));
+  function base64(bytes) {
     let binary = '';
     for (let index = 0; index < bytes.length; index += 0x8000) {
       binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
     }
-    return `${DATA_URL_PREFIX}${btoa(binary)}`;
+    return btoa(binary);
   }
 
-  function fitsDataUrl(content) {
-    const bytes = new TextEncoder().encode(String(content)).length;
-    return DATA_URL_PREFIX.length + Math.ceil(bytes / 3) * 4 <= MAX_DATA_URL_LENGTH;
+  // data: URLs for chrome.downloads: the UTF-8 bytes of a CSV text, or the bytes of a ZIP.
+  function toDataUrl(content) {
+    return `${CSV_DATA_URL_PREFIX}${base64(new TextEncoder().encode(String(content)))}`;
+  }
+
+  function zipDataUrl(bytes) {
+    return `${ZIP_DATA_URL_PREFIX}${base64(bytes)}`;
+  }
+
+  // The only URLs the extension downloads: data URLs built here, short enough for Chrome.
+  function isDownloadUrl(url) {
+    if (typeof url !== 'string' || url.length > MAX_DATA_URL_LENGTH) return false;
+    const prefix = [CSV_DATA_URL_PREFIX, ZIP_DATA_URL_PREFIX].find((candidate) => url.startsWith(candidate));
+    return Boolean(prefix) && BASE64.test(url.slice(prefix.length));
   }
 
   const api = {
     DEFAULT_PREFIX,
-    DEFAULT_FOLDER,
     MAX_DATA_URL_LENGTH,
     sanitizePrefix,
     sanitizeFolder,
     fileNames,
     downloadPath,
     toDataUrl,
-    fitsDataUrl,
+    zipDataUrl,
+    isDownloadUrl,
   };
 
   root.LFX = root.LFX || {};

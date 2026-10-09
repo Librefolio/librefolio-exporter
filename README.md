@@ -92,23 +92,21 @@ To install a new version later, see [Update](#-update).
 1. Log in to Scalable Capital: the **LibreFolio** button appears in the bottom-right
    corner of every page.
 2. Click it, choose the accounts and the period, and click **Export CSV**.
-3. **Choose the folder** for the files, for example `Downloads/LibreFolio`: Chrome does
-   not accept Downloads, Documents or Desktop themselves, only folders inside them.
-4. **Allow** Chrome to edit files there. Chrome asks on behalf of the Scalable page,
-   because the extension works inside it. The export then runs and writes both files.
+3. Choose where to save in Chrome's *Save as* window: any folder.
 
-In Brave, which turns the folder picker off, Chrome's *Save as* window opens at the end
-instead: inside Downloads, the other file follows on its own. Details in
-[How it works](docs/HOW-IT-WORKS.md#-saving).
+With both accounts you get one ZIP holding the two CSV files: double-click it to extract
+them. **Show in Finder**, at the end of the export, opens its folder. With one account
+you get its CSV file.
 
 <img src="docs/images/panel.png" alt="The panel after an export" width="400">
 
 The first export reads the whole history. The next ones start from the last export
 (**Since last**), so only new transactions are read.
 
-You get one file per account, `scalable-broker_<date>_<time>.csv` and
+Each account has its CSV file, `scalable-broker_<date>_<time>.csv` and
 `scalable-deposit_<date>_<time>.csv`, with the columns of Scalable's official export
-([format](docs/FORMAT.md)). LibreFolio will import them through its Scalable plugin.
+([format](docs/FORMAT.md)); with both accounts they come together in
+`scalable_<date>_<time>.zip`. LibreFolio will import them through its Scalable plugin.
 
 ## 🔄 Update
 

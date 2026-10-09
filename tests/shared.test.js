@@ -110,6 +110,7 @@ test('file names and download paths', () => {
   assert.deepEqual(files.fileNames('my', '2026-10-08_16-54-20'), {
     broker: 'my-broker_2026-10-08_16-54-20.csv',
     deposit: 'my-deposit_2026-10-08_16-54-20.csv',
+    archive: 'my_2026-10-08_16-54-20.zip',
   });
   assert.equal(files.fileNames('', 'x').broker, 'scalable-broker_x.csv');
   assert.equal(files.downloadPath('LibreFolio', 'a.csv'), 'LibreFolio/a.csv');
@@ -117,14 +118,22 @@ test('file names and download paths', () => {
   assert.equal(files.downloadPath('x', '../a?.csv'), 'x/a.csv');
 });
 
-test('data URLs carry the UTF-8 bytes and have a size limit', () => {
+test('data URLs carry the UTF-8 bytes of a CSV or the bytes of a ZIP, within a size limit', () => {
   const text = 'date;description\n2026-10-08;Zinsen für Tagesgeld €\n';
   const url = files.toDataUrl(text);
   assert.ok(url.startsWith('data:text/csv;charset=utf-8;base64,'));
   assert.equal(Buffer.from(url.split(',')[1], 'base64').toString('utf8'), text);
-  assert.equal(files.fitsDataUrl(text), true);
-  const limitBytes = Math.floor((files.MAX_DATA_URL_LENGTH - 'data:text/csv;charset=utf-8;base64,'.length) / 4) * 3;
-  assert.equal(files.fitsDataUrl('a'.repeat(limitBytes)), true);
-  assert.equal(files.fitsDataUrl('a'.repeat(limitBytes + 3)), false);
-  assert.equal(files.fitsDataUrl('€'.repeat(Math.ceil(limitBytes / 3) + 1)), false, 'measured in bytes, not characters');
+  assert.equal(files.isDownloadUrl(url), true);
+  const zip = files.zipDataUrl(new Uint8Array([80, 75, 5, 6, 0, 255]));
+  assert.ok(zip.startsWith('data:application/zip;base64,'));
+  assert.deepEqual([...Buffer.from(zip.split(',')[1], 'base64')], [80, 75, 5, 6, 0, 255]);
+  assert.equal(files.isDownloadUrl(zip), true);
+
+  const prefix = 'data:text/csv;charset=utf-8;base64,';
+  const longest = Math.floor((files.MAX_DATA_URL_LENGTH - prefix.length) / 4) * 4;
+  assert.equal(files.isDownloadUrl(prefix + 'A'.repeat(longest)), true);
+  assert.equal(files.isDownloadUrl(prefix + 'A'.repeat(longest + 4)), false, 'too long for Chrome');
+  for (const other of ['data:text/html;base64,PGI+', 'https://example.com/a.csv', `${prefix}<b>`, 'javascript:alert(1)', null, 42]) {
+    assert.equal(files.isDownloadUrl(other), false, String(other));
+  }
 });

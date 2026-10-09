@@ -27,8 +27,6 @@
   const COUNTED_STEPS = new Set(['progressDeposit', 'progressBrokerDetails', 'progressDepositDetails']);
   const SAVE_POLL_MS = 500;
   const SAVE_WAIT_MS = 15 * 60 * 1000;
-  // Chrome's folder picker remembers the last folder chosen under this id, for this site.
-  const FOLDER_PICKER_ID = 'librefolio-exporter';
   const ERROR_KEYS = {
     noPerson: 'errorNoPerson',
     noPortfolio: 'errorNoPortfolio',
@@ -55,6 +53,7 @@
   let updateRequest = 0;
   let recipePath = null;
   let recipeOfPage = null;
+  let lastSavedId = null;
 
   // Diagnostics in the page console, as plain text: operations, statuses and sources,
   // never identifiers, amounts or descriptions.
@@ -202,8 +201,8 @@
     return recipes;
   }
 
-  function anchorDownload(filename, content) {
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
+  function anchorDownload(filename, blob) {
+    const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = filename;
@@ -212,12 +211,6 @@
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30000);
-  }
-
-  // From the page, into Downloads: for a file too large for the extension, or when the
-  // extension does not answer.
-  function saveFromPage(files) {
-    for (const file of files) anchorDownload(file.name, file.content);
   }
 
   // Polls the background while Chrome's "Save as" window is open: each question keeps the
@@ -233,132 +226,52 @@
     return { state: 'failed', error: 'timeout' };
   }
 
-  // Chrome's folder picker (File System Access). Chrome opens it only within seconds of a
-  // click, asks for the permission on behalf of the page, and refuses the home, Desktop,
-  // Documents and Downloads folders themselves; some browsers (Brave) turn it off.
-  function folderPickerAvailable() {
-    return typeof root.showDirectoryPicker === 'function';
+  // The export as one file, so that one "Save as" window saves it in any folder: the CSV of
+  // the only account, or one ZIP holding the CSVs of both.
+  async function exportFile(files, names) {
+    if (files.length === 1) {
+      const [file] = files;
+      return {
+        name: file.name,
+        archive: false,
+        dataUrl: LFX.files.toDataUrl(file.content),
+        blob: () => new Blob([file.content], { type: 'text/csv;charset=utf-8' }),
+      };
+    }
+    const bytes = await LFX.zip.create(files.map((file) => ({ name: file.name, content: file.content })));
+    return { name: names.archive, archive: true, dataUrl: LFX.files.zipDataUrl(bytes), blob: () => new Blob([bytes], { type: 'application/zip' }) };
   }
 
-  // { folder } when chosen with permission to write; { cancelled } when the user closes the
-  // picker, { cancelled, denied } without that permission; {} when the picker cannot open
-  // here, and Chrome's "Save as" window is used instead. The folder is never stored: kept
-  // in the page's storage, the page itself could reach it.
-  async function pickFolder() {
-    let folder;
-    try {
-      folder = await root.showDirectoryPicker({ id: FOLDER_PICKER_ID, mode: 'readwrite', startIn: 'downloads' });
-    } catch (error) {
-      const name = (error && error.name) || 'Error';
-      log('folder-picker', { error: name });
-      return name === 'AbortError' ? { cancelled: true } : {};
-    }
-    let permission;
-    try {
-      permission = await folder.queryPermission({ mode: 'readwrite' });
-      if (permission !== 'granted') permission = await folder.requestPermission({ mode: 'readwrite' });
-    } catch (error) {
-      permission = 'denied';
-    }
-    log('folder-picker', { permission });
-    return permission === 'granted' ? { folder } : { cancelled: true, denied: true };
-  }
-
-  // Like Chrome's downloads, "name (1).csv" when the name is taken.
-  async function freeName(folder, name) {
-    const dot = name.lastIndexOf('.');
-    const stem = dot > 0 ? name.slice(0, dot) : name;
-    const extension = dot > 0 ? name.slice(dot) : '';
-    for (let index = 0; index < 100; index++) {
-      const candidate = index === 0 ? name : `${stem} (${index})${extension}`;
-      try {
-        await folder.getFileHandle(candidate);
-      } catch (error) {
-        if (error && error.name === 'NotFoundError') return candidate;
-        if (error && error.name === 'TypeMismatchError') continue;
-        throw error;
-      }
-    }
-    throw new Error('no free file name');
-  }
-
-  async function writeToFolder(folder, file) {
-    const name = await freeName(folder, file.name);
-    const handle = await folder.getFileHandle(name, { create: true });
-    const writable = await handle.createWritable();
-    try {
-      await writable.write(file.content);
-      await writable.close();
-    } catch (error) {
-      try {
-        await writable.abort();
-      } catch (ignored) {
-        // Already closed.
-      }
-      throw error;
-    }
-    return name;
-  }
-
-  // Writes the files in the folder chosen with Chrome's picker.
-  async function saveToFolder(folder, files) {
-    const saved = [];
-    for (const file of files) {
-      try {
-        saved.push({ account: file.account, folder: folder.name, name: await writeToFolder(folder, file) });
-      } catch (error) {
-        log('folder-write', { account: file.account, error: (error && error.name) || 'Error' });
-        return { ok: false, error: (error && error.message) || String(error), saved };
-      }
-    }
-    log('folder-write', { files: saved.length });
-    return { ok: true, saved };
-  }
-
-  // Chrome's "Save as" window for the first file, the others next to it. From the page,
-  // into Downloads, when a file is too large for the extension or it does not answer.
-  // saved: { account, folder } for each file written; ok false with the reason otherwise.
-  async function saveFiles(files, settings) {
-    const inDownloads = () => ({ ok: true, saved: files.map((file) => ({ account: file.account, folder: t('downloadsName') })) });
+  // Chrome's "Save as" window; from the page, into Downloads, when the file is too large for
+  // the extension or the extension does not answer. Saved: { ok, id, folder }, id being the
+  // download (null from the page); otherwise { cancelled } or { error }.
+  async function saveFile(file, settings) {
     const fromPage = (reason) => {
       log('download-fallback', { reason });
-      saveFromPage(files);
-      return inDownloads();
+      anchorDownload(file.name, file.blob());
+      return { ok: true, id: null, folder: t('downloadsName') };
     };
-    if (!files.every((file) => LFX.files.fitsDataUrl(file.content))) return fromPage('file too large for the extension');
-    const plain = files.map((file) => ({ name: file.name, content: file.content }));
+    if (!LFX.files.isDownloadUrl(file.dataUrl)) return fromPage('file too large for the extension');
+    const payload = { name: file.name, dataUrl: file.dataUrl };
     if (settings.saveDialog === false) {
-      const answer = await message({ type: 'lfx:download', files: plain, folder: '', saveAs: false });
-      if (answer && answer.ok) return inDownloads();
-      if (answer && answer.error) return { ok: false, error: answer.error, saved: [] };
+      const answer = await message({ type: 'lfx:download', files: [payload], folder: '' });
+      if (answer && answer.ok) return { ok: true, id: answer.ids[0], folder: t('downloadsName') };
+      if (answer && answer.error) return { ok: false, error: answer.error };
       return fromPage('no answer from the extension');
     }
-    const first = await message({ type: 'lfx:save-first', file: plain[0] });
-    if (!first) return fromPage('no answer from the extension');
-    if (!first.ok) return { ok: false, error: first.error, saved: [] };
-    const chosen = await waitForChoice(first.id);
-    log('save-first', { state: chosen.state });
-    if (chosen.state === 'cancelled') return { ok: false, cancelled: true, saved: [] };
-    if (chosen.state !== 'chosen') return { ok: false, error: chosen.error || chosen.state, saved: [] };
-    const saved = [{ account: files[0].account, folder: chosen.directory }];
-    if (files.length === 1) return { ok: true, saved };
-    const next = await message({ type: 'lfx:save-next', files: plain.slice(1), directory: chosen.directory });
-    if (!next || !next.ok) return { ok: false, error: (next && next.error) || 'no answer from the extension', saved };
-    for (const [index, result] of next.files.entries()) {
-      const account = files[index + 1].account;
-      if (result.directory) {
-        log('save-next', { account, how: 'next to the first file' });
-        saved.push({ account, folder: result.directory });
-        continue;
-      }
-      // Chrome opens a window for this file too: outside its download folder, or by its setting.
-      ui.setProgress(null, t('progressSavingNext'));
-      const choice = await waitForChoice(result.window);
-      log('save-next', { account, how: 'window', state: choice.state });
-      if (choice.state === 'chosen') saved.push({ account, folder: choice.directory });
-      else if (choice.state !== 'cancelled') return { ok: false, error: choice.error || choice.state, saved };
-    }
-    return { ok: true, saved };
+    const started = await message({ type: 'lfx:save-as', file: payload });
+    if (!started) return fromPage('no answer from the extension');
+    if (!started.ok) return { ok: false, error: started.error };
+    const chosen = await waitForChoice(started.id);
+    log('save', { file: file.archive ? 'zip' : 'csv', state: chosen.state });
+    if (chosen.state === 'cancelled') return { ok: false, cancelled: true };
+    if (chosen.state !== 'chosen') return { ok: false, error: chosen.error || chosen.state };
+    return { ok: true, id: started.id, folder: chosen.directory };
+  }
+
+  // The last saved file, in its folder (Finder, Explorer).
+  function onShowFile() {
+    if (lastSavedId !== null) message({ type: 'lfx:show-download', id: lastSavedId });
   }
 
   // force: ask GitHub now; otherwise the background answers from its daily cache.
@@ -430,21 +343,11 @@
     ui.setWarnings([]);
     ui.setStatus('');
     ui.setResult(null);
+    lastSavedId = null;
     // One collapsed group per export keeps the page's console readable.
     console.groupCollapsed(`[LibreFolio Exporter] ${t('exporting')} ${new Date().toLocaleTimeString()}`);
     try {
       const settings = await loadSettings();
-      // The folder comes first: Chrome opens its picker only within seconds of the click.
-      let folder = null;
-      if (settings.saveDialog !== false && folderPickerAvailable()) {
-        ui.setProgress(null, t('progressPickFolder'));
-        const picked = await pickFolder();
-        if (picked.cancelled) {
-          ui.setStatus(t(picked.denied ? 'folderDenied' : 'folderNotChosen'));
-          return;
-        }
-        folder = picked.folder || null;
-      }
       rememberIdsFromPage();
       const person = personInTab();
       const remembered = person ? await message({ type: 'lfx:recall-ids', personId: person.value }) : null;
@@ -501,42 +404,33 @@
         ui.setStatus(errorText(outcome.errors[0].error), 'error');
         return;
       }
-      const written = new Set();
+      let saved = null;
       if (files.length > 0) {
-        let result;
-        if (folder) {
-          ui.setProgress(null, t('progressWriting'));
-          result = await saveToFolder(folder, files);
+        const output = await exportFile(files, names);
+        if (settings.saveDialog !== false) ui.setProgress(null, t(output.archive ? 'progressSavingZip' : 'progressSavingOne'));
+        saved = await saveFile(output, settings);
+        lastSavedId = saved.ok && typeof saved.id === 'number' ? saved.id : null;
+        if (saved.ok) {
+          ui.setResult(
+            files.map((file) => ({ account: file.account, name: file.name, text: t(file.account === 'broker' ? 'resultBroker' : 'resultDeposit', file.count) })),
+            t('resultFolder', saved.folder),
+            { archive: output.archive ? output.name : '', canShow: lastSavedId !== null },
+          );
+        } else if (saved.cancelled) {
+          ui.setStatus(t('saveCancelled'));
         } else {
-          if (settings.saveDialog !== false) ui.setProgress(null, files.length > 1 ? t('progressSaving', t('downloadsName')) : t('progressSavingOne'));
-          result = await saveFiles(files, settings);
-        }
-        for (const entry of result.saved) written.add(entry.account);
-        const savedNames = new Map(result.saved.map((entry) => [entry.account, entry.name]));
-        const folders = new Set(result.saved.map((entry) => entry.folder));
-        ui.setResult(
-          files
-            .filter((file) => written.has(file.account))
-            .map((file) => ({
-              account: file.account,
-              name: savedNames.get(file.account) || file.name,
-              text: t(file.account === 'broker' ? 'resultBroker' : 'resultDeposit', file.count),
-            })),
-          folders.size === 1 && result.saved[0].folder ? t('resultFolder', result.saved[0].folder) : '',
-        );
-        if (result.cancelled) ui.setStatus(t('saveCancelled'));
-        else if (!result.ok) {
-          log('save-error', { error: result.error });
-          ui.setStatus(t('saveFailed', result.error), 'error');
+          log('save-error', { error: saved.error });
+          ui.setStatus(t('saveFailed', saved.error), 'error');
         }
       } else {
         ui.setStatus(t('nothingToExport'));
       }
-      // An account read without errors is up to date until "to" once its file is saved, or
+      // An account read without errors is up to date until "to" once the file is saved, or
       // when it had nothing to export.
       const exportedUntil = options.to || LFX.format.todayBerlin();
       const dates = Object.assign({}, settings.lastExportDates);
-      const updated = ACCOUNTS.filter((account) => Array.isArray(outcome[account]) && (outcome[account].length === 0 || written.has(account)));
+      const savedFile = Boolean(saved && saved.ok);
+      const updated = ACCOUNTS.filter((account) => Array.isArray(outcome[account]) && (outcome[account].length === 0 || savedFile));
       for (const account of updated) dates[account] = exportedUntil;
       if (updated.length > 0) {
         await saveSettings({ lastExportDates: dates });
@@ -565,6 +459,8 @@
         today: () => LFX.format.todayBerlin(),
         shiftMonths: LFX.format.shiftMonths,
         fileNames: (prefix) => LFX.files.fileNames(prefix, LFX.format.fileTimestamp()),
+        showLabel: t(/mac/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '') ? 'showInFinder' : 'showInFolder'),
+        onShowFile,
         onOpen,
         onExport,
         onCancel,

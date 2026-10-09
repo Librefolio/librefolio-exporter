@@ -1,14 +1,18 @@
 // Drives a real export in the browser started by run.sh: usage `node e2e.mjs <cdpPort> <httpsPort> <workDir>`.
 // With SHOTS_DIR set, it also saves screenshots of the button and the panel there.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { connect } from './cdp.mjs';
+
+const { unzip } = createRequire(import.meta.url)('../unzip.js');
 
 const [cdpPort, httpsPort, workDir] = process.argv.slice(2);
 const DOWNLOADS = path.join(workDir, 'downloads');
 // Chrome's "Save as" window cannot open in a headless browser: the test turns it off
-// (saveDialog), so the files land in the profile's download directory, with their names.
+// (saveDialog), so the export lands in the profile's download directory, with its name.
 const SAVED = DOWNLOADS;
 const INTEREST_PATH = '/interest/api/graphql/';
 const TRANSACTIONS_PAGE = '/interest/overnight/sav-123456/transactions/';
@@ -48,11 +52,6 @@ cdp.on('Runtime.consoleAPICalled', (params) => {
 });
 const exceptions = [];
 cdp.on('Runtime.exceptionThrown', (params) => exceptions.push(params.exceptionDetails.exception ? params.exceptionDetails.exception.description : params.exceptionDetails.text));
-// The worlds of the page, among them the one where the extension's content scripts run.
-const contexts = [];
-cdp.on('Runtime.executionContextCreated', (params, eventSession) => {
-  if (eventSession === sessionId) contexts.push(params.context);
-});
 await cdp.send('Runtime.enable', {}, sessionId);
 
 function collect(node, found) {
@@ -166,26 +165,39 @@ assert.equal(outcome.error, undefined, outcome.error);
 assert.equal(outcome.items.length, 2);
 assert.match(outcome.items[0], /^✅ scalable-broker_\S+\.csv — 2 transazioni del conto broker$/);
 assert.match(outcome.items[1], /^✅ scalable-deposit_\S+\.csv — 2 movimenti del conto deposito$/);
+assert.match(await on('lfx-result-archive', 'function () { return this.textContent; }'), /^📦 scalable_\S+\.zip, con:$/);
 assert.equal(await on('lfx-result-folder', 'function () { return this.textContent; }'), '📁 Cartella: Download');
+assert.equal(await on('lfx-result-show', visible), true, 'the button that shows the file in its folder');
 await shot('result');
 await shot('panel-result', await box('lfx-panel'));
 
 // Only complete files: Chromium writes into .crdownload first.
-const csvFiles = () => (fs.existsSync(SAVED) ? fs.readdirSync(SAVED).filter((name) => name.endsWith('.csv')).sort() : []);
+const savedFiles = () => (fs.existsSync(SAVED) ? fs.readdirSync(SAVED).filter((name) => /\.(zip|csv)$/.test(name)).sort() : []);
 try {
-  await waitFor('two downloads', () => csvFiles().length === 2, 15000);
+  await waitFor('one download', () => savedFiles().length === 1, 15000);
 } catch (error) {
   console.error('download events:', JSON.stringify(downloadEvents));
   console.error('downloads tree:', JSON.stringify(listTree(DOWNLOADS)));
   throw error;
 }
-const [brokerFile, depositFile] = csvFiles();
-assert.match(brokerFile, /^scalable-broker_.*\.csv$/);
-assert.match(depositFile, /^scalable-deposit_.*\.csv$/);
-const broker = fs.readFileSync(path.join(SAVED, brokerFile), 'utf8').split('\n');
+const [zipFile] = savedFiles();
+assert.match(zipFile, /^scalable_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$/, 'both accounts in one ZIP');
+const zipPath = path.join(SAVED, zipFile);
+try {
+  assert.match(execFileSync('unzip', ['-t', zipPath], { encoding: 'utf8' }), /No errors detected/);
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+const entries = unzip(fs.readFileSync(zipPath));
+const stamp = zipFile.slice('scalable_'.length, -'.zip'.length);
+assert.deepEqual(
+  entries.map((entry) => entry.name),
+  [`scalable-broker_${stamp}.csv`, `scalable-deposit_${stamp}.csv`],
+);
+const broker = entries[0].text.split('\n');
 assert.ok(broker[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0,99;0;EUR;broker;1;t1;'));
 assert.ok(broker[2].includes(';"Deposit; ""SEPA""";Cash;Deposit;'));
-const deposit = fs.readFileSync(path.join(SAVED, depositFile), 'utf8').split('\n');
+const deposit = entries[1].text.split('\n');
 assert.ok(deposit[1].startsWith('2026-10-01;01:00:00;Executed;"RI-1";"Interest";Cash;Interest;;;;1,23;;0,44;EUR;deposit;1;d1;'), deposit[1]);
 assert.ok(deposit[1].includes(';0.44;1.67;'), 'tax and gross amount of the interest');
 assert.ok(deposit[2].startsWith('2026-09-29;12:00:00;Executed;"d2";"Withdrawal";Cash;Withdrawal;;;;-2,5;;;EUR;deposit;1;d2;'), deposit[2]);
@@ -218,68 +230,10 @@ const identifiers = events().find(([event]) => event === 'identifiers');
 assert.deepEqual(identifiers[1], { person: 'sessionStorage', portfolio: 'url', overnight: 'page', overnightAccounts: 1, overnightRecipes: [] });
 assert.deepEqual(events().find(([event]) => event === 'overnight-recipe')[1], { source: 'download', operation: 'Transactions' });
 
-// Second export, with Chrome's folder picker. Headless, its window cannot open: in the
-// world of the content scripts, the picker gives a folder of the page's private file system
-// (OPFS), where the extension writes through Chrome's own File System Access code.
-const extensionOrigin = worker.url.replace(/\/src\/background\.js$/, '');
-const world = contexts.find((context) => context.origin === extensionOrigin && context.auxData && context.auxData.type === 'isolated');
-assert.ok(world, `the content scripts' world: ${JSON.stringify(contexts.map((context) => [context.origin, context.auxData]))}`);
-async function inExtensionWorld(expression) {
-  const result = await cdp.send('Runtime.evaluate', { expression, contextId: world.id, awaitPromise: true, returnByValue: true }, sessionId);
-  if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails).slice(0, 600));
-  return result.result.value;
-}
-assert.equal(await inExtensionWorld('typeof showDirectoryPicker'), 'function', 'Chrome gives content scripts the folder picker');
-await inExtensionWorld(`(() => {
-  globalThis.lfxPicks = [];
-  globalThis.showDirectoryPicker = async (options) => {
-    globalThis.lfxPicks.push(options);
-    const storage = await navigator.storage.getDirectory();
-    return storage.getDirectoryHandle('LibreFolio', { create: true });
-  };
-  return true;
-})()`);
-const dialogOn = await cdp.send(
-  'Runtime.evaluate',
-  { expression: 'chrome.storage.local.set({ saveDialog: true }).then(() => true)', awaitPromise: true, returnByValue: true },
-  workerSession,
-);
-assert.equal(dialogOn.result && dialogOn.result.value, true);
-await on('lfx-export', click);
-const folderLine = await waitFor(
-  'export into the folder',
-  async () => {
-    const error = await on('lfx-status', 'function () { return /error/.test(this.className) ? this.textContent : ""; }');
-    if (error) return { error };
-    const line = await on('lfx-result-folder', 'function () { return this.hidden ? "" : this.textContent; }');
-    return line === '📁 Cartella: LibreFolio' ? { line } : null;
-  },
-  30000,
-);
-assert.equal(folderLine.error, undefined, folderLine.error);
-const written = await inExtensionWorld(`(async () => {
-  const folder = await (await navigator.storage.getDirectory()).getDirectoryHandle('LibreFolio');
-  const files = {};
-  for await (const [name, handle] of folder.entries()) files[name] = await (await handle.getFile()).text();
-  return { picks: globalThis.lfxPicks, files };
-})()`);
-assert.deepEqual(written.picks, [{ id: 'librefolio-exporter', mode: 'readwrite', startIn: 'downloads' }]);
-const folderNames = Object.keys(written.files).sort();
-assert.equal(folderNames.length, 2, JSON.stringify(folderNames));
-assert.match(folderNames[0], /^scalable-broker_\S+\.csv$/);
-assert.match(folderNames[1], /^scalable-deposit_\S+\.csv$/);
-assert.equal(written.files[folderNames[0]].split('\n')[1], broker[1], 'the same broker file as through the downloads');
-assert.equal(written.files[folderNames[1]].split('\n')[1], deposit[1], 'the same overnight file as through the downloads');
-assert.deepEqual(csvFiles(), [brokerFile, depositFile], 'nothing more in the download folder');
-assert.deepEqual(events().filter(([event]) => event === 'folder-picker' || event === 'folder-write'), [
-  ['folder-picker', { permission: 'granted' }],
-  ['folder-write', { files: 2 }],
-]);
-
 const consoleText = JSON.stringify(consoleLines);
 for (const secret of SECRETS) assert.ok(!consoleText.includes(secret), `the console must not show ${secret}`);
 
 assert.deepEqual(exceptions, [], 'no uncaught exception in the page');
 
 cdp.close();
-console.log(`✓ real-browser export: ${brokerFile}, ${depositFile}, ${requests.length} requests; then ${folderNames.length} files in the chosen folder`);
+console.log(`✓ real-browser export: ${zipFile} (${entries.map((entry) => entry.name).join(', ')}), ${requests.length} requests`);

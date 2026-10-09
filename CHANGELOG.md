@@ -23,19 +23,15 @@ First preview, installed by hand.
   query of its list seen on the pages are remembered until the browser closes.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
   with the original values ([format version 1](docs/FORMAT.md)).
-- Folder picker: at **Export CSV** you choose the folder, and both files are written
-  there (File System Access). Chrome asks for the permission on behalf of the Scalable
-  page; it does not accept Downloads, Documents or Desktop themselves, only folders
-  inside them. The start of the file names can be changed.
-- Where the folder picker is off (Brave) or cannot open, one *Save as* window per
-  export: the other file goes into the same folder, without a window when Chrome allows
-  it (inside its download folder); elsewhere Chrome asks again, and the panel says to
-  choose the same folder. Files keep their names when another extension renames
-  downloads.
+- One *Save as* window per export, in any folder: the CSV file of the account, or one ZIP
+  holding the CSV files of both accounts. The start of the file names can be changed,
+  and the panel shows the names of the next export. Files keep their names when another
+  extension renames downloads.
 - Accounts chosen with two tiles; a progress bar with the current step while exporting,
   and the details in one collapsed group of the browser console.
-- A green list of the saved files at the end, with what each contains and the folder.
-  An account counts as exported only once its file is saved.
+- At the end, a green list of the saved file, the CSV files it holds and its folder, with
+  a button that shows it in Finder or Explorer. An account counts as exported only once
+  the file is saved.
 - Period selection with the 1M, 3M, 1Y, All and "since last" buttons, the last one per
   account so that nothing is skipped; **To** defaults to today, and the form keeps its
   values across pages for the day. After the first export, only new transactions are read.

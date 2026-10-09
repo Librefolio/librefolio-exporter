@@ -25,6 +25,7 @@
         "src/shared/version.js",
         "src/shared/csv.js",
         "src/shared/files.js",
+        "src/shared/zip.js",
         "src/shared/i18n.js",
         "src/brokers/scalable/queries.js",
         "src/brokers/scalable/flight.js",
