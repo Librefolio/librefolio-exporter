@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const mapping = require('../src/brokers/scalable/mapping.js');
 
 const CONTEXT = { exporter: 'librefolio-exporter/0.0.0-test' };
@@ -243,4 +245,71 @@ test('overnight outflows are negative in the Prime amount, verbatim in lf_amount
   assert.equal(map('INTEREST', 11.05).amount, '11,05');
   assert.equal(map('WITHDRAWAL', 0).amount, '0', 'zero stays zero');
   assert.equal(map('WITHDRAWAL', -5).amount, '-5', 'a sign already present is kept');
+});
+
+test('every field is written but the excluded ones, new fields included', () => {
+  const summary = Object.assign(savingsPlanBuy(), { brandNewField: 'x', newObject: { innerValue: 2, __typename: 'Inner' }, legs: [{ a: 1 }], emptyOne: null });
+  const details = Object.assign(buyDetails(), { lastEventDateTime: '2023-06-11T09:30:00.000Z' });
+  const row = mapping.mapBrokerTransaction(summary, { status: 'yes', details }, CONTEXT);
+  assert.equal(row.lf_brand_new_field, 'x');
+  assert.equal(row.lf_new_object_inner_value, '2', 'nested objects are walked');
+  assert.equal(row.lf_legs, '[{"a":1}]', 'a list is kept whole, as JSON');
+  assert.equal(row.lf_total_shares, '4.981');
+  assert.equal(row.lf_timestamp_utc, '2023-06-11T09:29:06.000Z', 'a field in both keeps the list value');
+  assert.equal(row.lf_details_last_event_date_time, '2023-06-11T09:30:00.000Z', 'and a different value in the details is kept apart');
+  const lfColumns = Object.keys(row).filter((name) => name.startsWith('lf_'));
+  for (const name of lfColumns) assert.doesNotMatch(name, /typename|currency|description|isin|security|is_pending|transaction_history|empty_one/, name);
+
+  assert.deepEqual(mapping.extraColumns([row]), ['lf_brand_new_field', 'lf_details_last_event_date_time', 'lf_legs', 'lf_new_object_inner_value']);
+  const names = mapping.columnsFor([row]).map((column) => column.name);
+  assert.deepEqual(names.slice(-8), [
+    'lf_transaction_reference',
+    'lf_brand_new_field',
+    'lf_details_last_event_date_time',
+    'lf_legs',
+    'lf_new_object_inner_value',
+    'lf_details',
+    'lf_exporter',
+    'lf_format',
+  ]);
+  assert.deepEqual(mapping.columnsFor([]), mapping.COLUMNS, 'without new fields, the fixed columns');
+});
+
+test('the ids of the person and of the accounts are masked wherever they appear; IBANs are shortened', () => {
+  const context = Object.assign({}, CONTEXT, { privateIds: { person: ['short-person-1'], portfolio: ['portfolio-1234'], account: ['sVJo3Mf7Y1kBxP7kpBFcfD'] } });
+  const id = 'CASH_sVJo3Mf7Y1kBxP7kpBFcfD_INTEREST-PAY-sVJo3Mf7Y1kBxP7kpBFcfD-12103494_2026-10-01';
+  const interest = { id, cashTransactionType: 'INTEREST', status: 'SETTLED', amount: 11.05, currency: 'EUR', description: 'Bonifico da IT60 X054 2811 1010 0000 0123 456 per IE00BJ0KDQ92' };
+  const row = mapping.mapDepositTransaction(interest, 1, context);
+  assert.match(row.lf_id, /^CASH_(account-[0-9a-f]{8})_INTEREST-PAY-\1-12103494_2026-10-01$/);
+  assert.equal(row.reference, row.lf_id, 'without details, the reference is the masked id');
+  assert.ok(!JSON.stringify(row).includes('sVJo3Mf7Y1kBxP7kpBFcfD'));
+  assert.equal(mapping.mapDepositTransaction(Object.assign({}, interest), 1, context).lf_id, row.lf_id, 'the same id always gives the same tag');
+  assert.equal(row.description, 'Bonifico da IT60…3456 per IE00BJ0KDQ92', 'the IBAN is shortened, the ISIN untouched');
+
+  const trade = mapping.mapBrokerTransaction(Object.assign(savingsPlanBuy(), { id: 'portfolio-1234/tx-9', description: 'for short-person-1' }), null, context);
+  assert.match(trade.lf_id, /^portfolio-[0-9a-f]{8}\/tx-9$/);
+  assert.match(trade.description, /^for person-[0-9a-f]{8}$/);
+  assert.equal(mapping.maskIds('abc', { privateIds: { account: ['ab'] } }), 'abc', 'too short to be an id');
+  assert.equal(mapping.maskIban('DE89370400440532013000'), 'DE89…3000');
+});
+
+test('like the official export, an order never executed has no shares', () => {
+  const cancelled = mapping.mapBrokerTransaction(Object.assign(savingsPlanBuy(), { status: 'CANCELLED', securityTransactionType: 'SINGLE' }), { status: 'n/a' }, CONTEXT);
+  assert.equal(cancelled.status, 'Cancelled');
+  assert.equal(cancelled.shares, '0');
+  assert.equal(cancelled.lf_quantity, '4.981', 'the quantity ordered stays in lf_quantity');
+  const partial = mapping.mapBrokerTransaction(
+    Object.assign(savingsPlanBuy(), { status: 'PARTIAL_FILLED', quantity: 10 }),
+    { status: 'yes', details: Object.assign(buyDetails(), { numberOfShares: { filled: 4, total: 10 } }) },
+    CONTEXT,
+  );
+  assert.equal(partial.shares, '4', 'the shares executed');
+  assert.equal(partial.lf_filled_shares, '4');
+  assert.equal(partial.lf_total_shares, '10');
+});
+
+test('docs/FORMAT.md lists every excluded field and every fixed column', () => {
+  const doc = fs.readFileSync(path.join(__dirname, '..', 'docs', 'FORMAT.md'), 'utf8');
+  for (const field of Object.keys(mapping.EXCLUDED_FIELDS)) assert.ok(doc.includes(`\`${field}\``), field);
+  for (const column of mapping.LF_COLUMNS) assert.ok(doc.includes(`\`${column.name}\``), column.name);
 });

@@ -229,6 +229,7 @@ const events = () => consoleLines.map((values) => [values[1], values[2] === unde
 const identifiers = events().find(([event]) => event === 'identifiers');
 assert.deepEqual(identifiers[1], { person: 'sessionStorage', portfolio: 'url', overnight: 'page', overnightAccounts: 1, overnightRecipes: [] });
 assert.deepEqual(events().find(([event]) => event === 'overnight-recipe')[1], { source: 'download', operation: 'Transactions' });
+assert.deepEqual(events().filter(([event]) => event === 'new-fields'), [], 'every field of the responses is known or excluded');
 
 const consoleText = JSON.stringify(consoleLines);
 for (const secret of SECRETS) assert.ok(!consoleText.includes(secret), `the console must not show ${secret}`);

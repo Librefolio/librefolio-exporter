@@ -40,9 +40,11 @@ only adds its own button and panel.
   used only for the same person.
 
 Your transactions are never written to the extension's storage. The CSV files contain
-the transactions as Scalable describes them, with their ids and references; your person
-and portfolio ids are not written, but the id of an overnight-account transaction can
-contain the id of that account (interest payments do).
+the transactions as Scalable describes them, with their ids and references. The ids of
+the person, of the portfolio and of the overnight accounts are never written: where a
+value contains one, as the overnight account's transaction ids do, it is replaced by a
+short tag that does not give the id back. IBANs in descriptions are shortened, like
+`IT60…3456`. Details in [docs/FORMAT.md](docs/FORMAT.md#privacy).
 
 To give its own files their names, the extension takes part in naming downloads
 (Chrome's `downloads.onDeterminingFilename`): it answers only for the files it saves,

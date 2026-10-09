@@ -645,6 +645,7 @@ test('the content scripts export both accounts end to end', async () => {
   assert.deepEqual(logged(page, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'url', overnight: 'page', overnightAccounts: 1, overnightRecipes: [] }]);
   assert.deepEqual(logged(page, 'overnight-recipe'), [{ source: 'download', operation: 'Transactions' }]);
   assert.equal(logged(page, 'request').length, 5);
+  assert.deepEqual(logged(page, 'new-fields'), [], 'every field of the responses is known or excluded');
   const structure = logged(page, 'structure of the export (no amounts, descriptions or identifiers)');
   assert.equal(structure.length, 1);
   assert.equal(structure[0].reduce((total, entry) => total + entry.count, 0), 4);

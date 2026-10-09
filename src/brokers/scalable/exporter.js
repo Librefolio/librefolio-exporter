@@ -143,6 +143,11 @@
       progress('progressDeposit', index + 1, accounts.length);
       const result = await readDepositList({ api, ids, savingsAccountId, options, diagnostics });
       if (!result.complete) warnings.push({ key: 'warnDepositPartial', args: [result.transactions.length] });
+      // The interest app knows the person by a short code of its own: masked as well.
+      const privateIds = Object.assign({}, context.privateIds, {
+        person: ((context.privateIds && context.privateIds.person) || []).concat(result.recipe.variables.personId || []),
+      });
+      const accountContext = Object.assign({}, context, { privateIds });
       const selected = uniqueById(result.transactions).filter((transaction) => inRange(transaction.lastEventDateTime, options.from, options.to));
 
       let detailsById = new Map();
@@ -157,7 +162,7 @@
         warnings.push(...read.warnings);
       }
       for (const transaction of selected) {
-        rows.push(mapping.mapDepositTransaction(transaction, index + 1, context, detailsById.get(transaction.id)));
+        rows.push(mapping.mapDepositTransaction(transaction, index + 1, accountContext, detailsById.get(transaction.id)));
       }
     }
     return { rows, warnings };
@@ -169,12 +174,21 @@
     const report = progress || (() => {});
     const note = diagnostics || (() => {});
     const outcome = { broker: null, deposit: null, warnings: [], errors: [] };
+    // The ids of the person and of the accounts are never written: where a value contains
+    // one, it becomes a tag (mapping.maskIds).
+    const rowContext = Object.assign({}, context, {
+      privateIds: {
+        person: [ids.personId].filter(Boolean),
+        portfolio: [ids.portfolioId].filter(Boolean),
+        account: (ids.savingsAccountIds || []).filter(Boolean),
+      },
+    });
     const sections = [];
     if (options.broker) sections.push(['broker', exportBroker]);
     if (options.deposit) sections.push(['deposit', exportDeposit]);
     for (const [account, run] of sections) {
       try {
-        const result = await run({ api, ids, options, progress: report, context, diagnostics: note });
+        const result = await run({ api, ids, options, progress: report, context: rowContext, diagnostics: note });
         outcome[account] = result.rows;
         outcome.warnings.push(...result.warnings);
       } catch (error) {
@@ -182,11 +196,14 @@
         outcome.errors.push({ account, error });
       }
     }
+    // Fields of the web app that this version does not know yet: their names, never values.
+    const newFields = mapping.extraColumns([].concat(outcome.broker || [], outcome.deposit || []));
+    if (newFields.length > 0) note('new-fields', newFields);
     return outcome;
   }
 
   function toCsv(rows) {
-    return csv.build(mapping.COLUMNS, rows);
+    return csv.build(mapping.columnsFor(rows), rows);
   }
 
   function sign(plain) {

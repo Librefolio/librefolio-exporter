@@ -84,8 +84,9 @@ it to see the details. It lists where the identifiers were found (not the identi
 where the query of the overnight account's list came from (the page, the session memory
 or a download of the page), every request (operation, path, HTTP status, duration), how
 each file was saved and, at the end, the structure of the export: kinds, statuses, signs
-and counts. It never prints identifiers, amounts, descriptions or folders, so you can
-paste it into an issue.
+and counts. When a response carries a field this version does not know yet, `new-fields`
+lists its name: it is already in the CSV, as a column of its own. It never prints
+identifiers, amounts, descriptions or folders, so you can paste it into an issue.
 
 When something fails, the panel also shows a *technical details* line: include it in
 bug reports.

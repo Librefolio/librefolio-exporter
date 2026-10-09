@@ -290,3 +290,26 @@ test('summarize keeps kinds, statuses and signs, never amounts or identifiers', 
   assert.equal(interest.tax, '+');
   assert.equal(summary.reduce((total, entry) => total + entry.count, 0), 4);
 });
+
+test('a field the web app adds arrives in the CSV, and its name in the diagnostics', async () => {
+  const notes = [];
+  const { api } = fakeApi({
+    async listBrokerTransactions() {
+      return [Object.assign(cash('c9', '2026-02-01T10:00:00Z'), { brandNewField: 'v', description: 'paid from portfolio' })];
+    },
+    async listDepositTransactions() {
+      return { transactions: [interest('CASH_short-1_s1_x', '2026-02-28T12:00:00Z')], total: 1, complete: true };
+    },
+  });
+  const outcome = await exporter.runExport({ api, ids: IDS, options: ALL, context: CONTEXT, diagnostics: (event, data) => notes.push([event, data]) });
+  assert.equal(outcome.broker[0].lf_brand_new_field, 'v');
+  assert.deepEqual(
+    notes.filter(([event]) => event === 'new-fields'),
+    [['new-fields', ['lf_brand_new_field']]],
+    'names only, never values',
+  );
+  const header = exporter.toCsv(outcome.broker).split('\n')[0].split(';');
+  assert.deepEqual(header.slice(-4), ['lf_brand_new_field', 'lf_details', 'lf_exporter', 'lf_format']);
+  assert.match(outcome.broker[0].description, /^paid from portfolio-[0-9a-f]{8}$/, 'the portfolio id never appears');
+  assert.match(outcome.deposit[0].lf_id, /^CASH_person-[0-9a-f]{8}_s1_x$/, "the interest app's short code of the person is masked too");
+});
