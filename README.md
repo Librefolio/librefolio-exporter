@@ -102,14 +102,15 @@ With one account you get its CSV file. At the end each row says how many transac
 were read, and below them come the saved file, its folder and **Show folder**, which
 opens the folder.
 
-<div align="center">
-<table>
-  <tr>
-    <td align="center"><img src="docs/images/panel-progress.png" alt="The panel while exporting" width="300"><br><sub>While exporting: one row per account</sub></td>
-    <td align="center"><img src="docs/images/panel.png" alt="The panel after an export" width="300"><br><sub>Done: what was read, the file, its folder</sub></td>
-  </tr>
-</table>
-</div>
+<p align="center">
+  <img src="docs/images/panel-open.png" alt="The panel ready to export" width="260" align="top">
+  &nbsp;
+  <img src="docs/images/panel-progress.png" alt="The panel while exporting: choices locked, one row per account" width="260" align="top">
+  &nbsp;
+  <img src="docs/images/panel.png" alt="The panel after an export: what was read, the file, its folder" width="260" align="top">
+  <br>
+  <sub>From left: ready to export; while exporting, with the choices locked and one row per account; done, with what was read, the file and its folder.</sub>
+</p>
 
 The first export reads the whole history. The next ones start from the last export
 (**Since last**), so only new transactions are read.

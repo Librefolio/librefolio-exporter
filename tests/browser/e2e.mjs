@@ -149,6 +149,8 @@ assert.equal(await on('lfx-panel', 'function () { return this.querySelector("h2"
 await on('lfx-risk-accept', click);
 await waitFor('export enabled', () => on('lfx-export', 'function () { return !this.disabled; }'));
 assert.equal(await on('lfx-risk', visible), false);
+// The panel as a user finds it once the notice is accepted, before the first export.
+await shot('panel-open', await box('lfx-panel'));
 
 await on('lfx-export', click);
 // While reading: one row per account, both moving from the start.

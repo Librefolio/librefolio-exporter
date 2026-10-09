@@ -36,7 +36,8 @@
 
   // Where each field of the web app goes, so that none is written twice: in the lf_*
   // column named here (`column`); only in the Prime column that already carries it
-  // (`prime`); or nowhere, because it repeats another field (`none`). GraphQL's
+  // (`prime`); or nowhere, because it repeats another field (`none`). A column that only
+  // one account fills (`account`) is left out of the other account's file. GraphQL's
   // __typename names types, not data, and is never written. A field missing here can only
   // come from a query of the web app that Scalable has changed: it is written as a new
   // column named after its path (numberOfShares.total → lf_number_of_shares_total).
@@ -47,12 +48,11 @@
     nonTradeSecurityTransactionType: { column: 'lf_subtype' },
     status: { column: 'lf_status' },
     isCancellation: { column: 'lf_is_cancellation' },
-    'numberOfShares.total': { column: 'lf_ordered_shares', when: 'not all were executed' },
-    'tradeTransactionAmounts.transactionFee': { column: 'lf_transaction_fee' },
-    'tradeTransactionAmounts.venueFee': { column: 'lf_venue_fee' },
-    'tradeTransactionAmounts.cryptoSpreadFee': { column: 'lf_crypto_spread_fee' },
-    tradingVenue: { column: 'lf_trading_venue' },
-    transactionHistory: { column: 'lf_transaction_history' },
+    'numberOfShares.total': { column: 'lf_ordered_shares', when: 'not all were executed', account: 'broker' },
+    'tradeTransactionAmounts.transactionFee': { column: 'lf_transaction_fee', account: 'broker' },
+    'tradeTransactionAmounts.venueFee': { column: 'lf_venue_fee', account: 'broker' },
+    'tradeTransactionAmounts.cryptoSpreadFee': { column: 'lf_crypto_spread_fee', account: 'broker' },
+    tradingVenue: { column: 'lf_trading_venue', account: 'broker' },
     lastEventDateTime: { prime: 'date, time' },
     transactionReference: { prime: 'reference' },
     description: { prime: 'description' },
@@ -60,8 +60,8 @@
     side: { prime: 'type' },
     isin: { prime: 'isin' },
     relatedIsin: { prime: 'isin' },
-    quantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed' },
-    eltifQuantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed' },
+    quantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed', account: 'broker' },
+    eltifQuantity: { prime: 'shares', column: 'lf_ordered_shares', when: 'not all were executed', account: 'broker' },
     'numberOfShares.filled': { prime: 'shares' },
     averagePrice: { prime: 'price' },
     amount: { prime: 'amount' },
@@ -70,6 +70,7 @@
     currency: { prime: 'currency' },
     isPending: { none: 'repeats the status' },
     'taxDetails.grossAmount': { none: 'equals amount + tax' },
+    transactionHistory: { none: 'repeats the status and the date' },
   };
 
   function knownField(path) {
@@ -164,7 +165,9 @@
 
   function columnsFor(rows) {
     const closing = new Set(CLOSING_COLUMNS.map((column) => column.name));
-    return COLUMNS.filter((column) => !closing.has(column.name)).concat(
+    const accounts = new Set(rows.map((row) => row.lf_account));
+    const ofTheseAccounts = (column) => !column.account || rows.length === 0 || accounts.has(column.account);
+    return COLUMNS.filter((column) => !closing.has(column.name) && ofTheseAccounts(column)).concat(
       extraColumns(rows).map((name) => ({ name })),
       CLOSING_COLUMNS,
     );
@@ -173,11 +176,14 @@
   // Not fields of the web app: which account, and which of its overnight accounts.
   const ACCOUNT_COLUMNS = ['lf_account', 'lf_account_index'].map((name) => ({ name }));
 
-  // The fixed lf_* columns: the account, the known fields in order, the closing columns.
-  const LF_COLUMNS = ACCOUNT_COLUMNS.concat(
-    Array.from(new Set(Object.values(FIELDS).map((field) => field.column).filter(Boolean))).map((name) => ({ name })),
-    CLOSING_COLUMNS,
-  );
+  // The fixed lf_* columns: the account, the known fields in order, with the account
+  // that fills them when only one does, the closing columns.
+  const FIELD_COLUMNS = [];
+  for (const field of Object.values(FIELDS)) {
+    if (!field.column || FIELD_COLUMNS.some((column) => column.name === field.column)) continue;
+    FIELD_COLUMNS.push(field.account ? { name: field.column, account: field.account } : { name: field.column });
+  }
+  const LF_COLUMNS = ACCOUNT_COLUMNS.concat(FIELD_COLUMNS, CLOSING_COLUMNS);
 
   const COLUMNS = PRIME_COLUMNS.concat(LF_COLUMNS);
 

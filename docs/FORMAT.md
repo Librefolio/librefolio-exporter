@@ -8,7 +8,9 @@ inside.
 
 Each field the web app returns is written **once**: in its column of Scalable's own
 layout (columns 1–14) when one carries it, otherwise in an `lf_*` column. The table
-[Where each field goes](#where-each-field-goes) lists them all.
+[Where each field goes](#where-each-field-goes) lists them all. Both files have the 14
+columns; the `lf_*` columns that only the broker fills are left out of the overnight
+account's file.
 
 ## Conventions
 
@@ -40,7 +42,7 @@ and `lf_subtype`.
 |---|---|
 | `date`, `time` | `lastEventDateTime`, converted to Europe/Berlin |
 | `status` | `SETTLED`, `FILLED`, `CONFIRMED` → `Executed`; `CANCELLED` → `Cancelled`; `EXPIRED` → `Expired`; `REJECTED` → `Rejected`; `CREATED`, `REQUESTED`, `PENDING`, `PARTIAL_FILLED`, `CANCEL_REQUESTED` → `Pending`; any other value as received |
-| `reference` | `transactionReference`: Scalable's reference, the one on its documents (`SCAL…`). It comes with the details of executed trades and of interest; empty on the other rows, and when the details are not read |
+| `reference` | `transactionReference`, Scalable's reference: `SCAL…` for trades, the one on its documents; `INTEREST-PAY-…` for interest. It comes with the details of executed trades and of interest; empty on the other rows, and when the details are not read |
 | `description` | `description` as received: the security name of a trade, the text of a transfer, names and IBANs included |
 | `assetType` | `Cash` for cash transactions and the overnight account, `Security` otherwise |
 | `type` | See below |
@@ -84,10 +86,12 @@ and `lf_subtype`.
 | `lf_venue_fee` | Trade details `tradeTransactionAmounts.venueFee` | The trading venue's fee, a part of `fee` |
 | `lf_crypto_spread_fee` | Trade details `tradeTransactionAmounts.cryptoSpreadFee` | The crypto spread, a part of `fee` |
 | `lf_trading_venue` | Trade details `tradingVenue` | Where the trade was executed, e.g. `SEIX` |
-| `lf_transaction_history` | Interest details `transactionHistory` | Status changes with their times, as JSON |
 | `lf_details` | Not a field | `yes` (details read), `no` (not requested), `error` (could not be read), `n/a` (neither an executed trade nor an interest payment) |
 | `lf_exporter` | Not a field | Producer and version, e.g. `librefolio-exporter/1.0.0` |
 | `lf_format` | Not a field | Format version of this document |
+
+`lf_ordered_shares`, `lf_transaction_fee`, `lf_venue_fee`, `lf_crypto_spread_fee` and
+`lf_trading_venue` are in the broker's file only.
 
 When `lf_details` is `no` or `error`, empty fee and tax fields mean *unknown*, not zero.
 
@@ -126,7 +130,7 @@ carries:
 | `taxDetails.taxAmount` | `tax` | Interest details |
 | `taxDetails.grossAmount` | None | Interest details; it equals `amount` + `tax` |
 | `tradingVenue` | `lf_trading_venue` | Trade details |
-| `transactionHistory` | `lf_transaction_history` | Interest details |
+| `transactionHistory` | None | Interest details; it repeats the status and the date |
 | `currency` | `currency` | |
 
 A field that is not in this table is new:
@@ -182,6 +186,9 @@ the broker does; the subtype stays in `lf_subtype`.
 - Every status is exported, cancelled and rejected orders included: consumers filter
   on `lf_status`.
 - Person, portfolio and overnight-account ids are never written (see Privacy).
+- Cash movements (deposits, transfers, the overnight account) come with a date and no
+  time: the web app gives midnight UTC, written as `02:00:00` German summer time
+  (`01:00:00` in winter).
 - To confirm on real data: sells, dividends, fees and taxes on the broker; whether
   `lastEventDateTime` is the trade or the settlement time; whether `quantity` of an
   order filled in part is the shares ordered or the shares executed (the details give
@@ -196,7 +203,7 @@ that read them (2026-10).
 |---|---|---|
 | Columns | The 14 above | The same 14, then the `lf_*` columns |
 | Accounts | Broker only | Broker and overnight account |
-| `reference` | On every row, 15 letters and digits | The same on executed trades and interest, whose details are read; empty on the other rows, whose id is in `lf_id` |
+| `reference` | On every row, 15 letters and digits (`SCAL…`) | `SCAL…` on executed trades and `INTEREST-PAY-…` on interest, whose details are read; empty on the other rows, whose id is in `lf_id` |
 | `shares` | Shares executed: `0` for a cancelled order | The same |
 | `fee`, `tax` of trades | Always filled, `0` when none | The same when the details are read; empty when they are not: unknown |
 | `fee`, `tax` of cash rows | `fee` `0`, `tax` empty in the samples ❓ | Both empty; `tax` filled on interest |

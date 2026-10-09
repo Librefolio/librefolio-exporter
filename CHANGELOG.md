@@ -23,7 +23,8 @@ First release, installed by hand.
   query of its list seen on the pages are remembered until the browser closes.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
   ([format version 1](docs/FORMAT.md)): every field that the queries return is written
-  once, in its official column or, when none carries it, in an `lf_*` column. On the
+  once, in its official column or, when none carries it, in an `lf_*` column. The
+  overnight account's file leaves out the columns that only the broker fills. On the
   overnight account, whose queries are the web app's own, a field Scalable adds arrives
   as a new column.
 - Privacy: the ids of the person and of the accounts never appear in the files, not even

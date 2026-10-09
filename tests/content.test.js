@@ -658,6 +658,8 @@ test('the content scripts export both accounts end to end', async () => {
   assert.ok(lines[1].endsWith(';yes;librefolio-exporter/1.0.0;1'));
   const deposit = depositFile.text.trimEnd().split('\n');
   assert.equal(deposit.length, 3);
+  assert.ok(lines[0].includes(';lf_trading_venue;'));
+  assert.ok(deposit[0].endsWith(';currency;lf_account;lf_account_index;lf_id;lf_subtype;lf_status;lf_is_cancellation;lf_details;lf_exporter;lf_format'), 'no broker columns in the overnight file');
   assert.ok(deposit[1].startsWith('2026-10-01;01:00:00;Executed;"RI-1";"Interest";Cash;Interest;;;;1,23;;0,44;EUR;deposit;1;d1;'), deposit[1]);
   assert.ok(deposit[2].startsWith('2026-09-29;12:00:00;Executed;"";"Withdrawal";Cash;Withdrawal;;;;-2,5;;;EUR;deposit;1;d2;'), deposit[2]);
 

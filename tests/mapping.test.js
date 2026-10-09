@@ -41,7 +41,7 @@ function buyDetails() {
 // Columns that would repeat a Prime column, or another field.
 const NEVER_WRITTEN = ['lf_kind', 'lf_side', 'lf_timestamp_utc', 'lf_amount', 'lf_quantity', 'lf_price', 'lf_filled_shares', 'lf_total_shares',
   'lf_total_amount', 'lf_market_valuation', 'lf_tax_amount', 'lf_gross_amount', 'lf_fee', 'lf_transactional_fee', 'lf_taxes',
-  'lf_transaction_reference', 'lf_description', 'lf_isin', 'lf_related_isin', 'lf_currency', 'lf_is_pending'];
+  'lf_transaction_reference', 'lf_description', 'lf_isin', 'lf_related_isin', 'lf_currency', 'lf_is_pending', 'lf_transaction_history'];
 
 test('the first 14 columns are the official Scalable CSV header', () => {
   assert.equal(mapping.PRIME_COLUMNS.map((column) => column.name).join(';'), PRIME_HEADER);
@@ -243,7 +243,7 @@ test('each field is written once; a field the web app adds gets a column of its 
   assert.deepEqual(mapping.extraColumns([row]), ['lf_brand_new_field', 'lf_details_last_event_date_time', 'lf_legs', 'lf_new_object_inner_value']);
   const names = mapping.columnsFor([row]).map((column) => column.name);
   assert.deepEqual(names.slice(-8), [
-    'lf_transaction_history',
+    'lf_trading_venue',
     'lf_brand_new_field',
     'lf_details_last_event_date_time',
     'lf_legs',
@@ -306,7 +306,7 @@ test('read details without a fee or a tax give 0, like the official export; unre
   assert.equal(mapping.mapDepositTransaction(interest, 1, CONTEXT, { status: 'yes', details: { taxDetails: { grossAmount: 2 } } }).tax, '0');
   assert.equal(mapping.mapDepositTransaction(interest, 1, CONTEXT, { status: 'no' }).tax, '');
 });
-test('the overnight details: the history is written; the pending flag and the gross amount repeat other fields', () => {
+test('the overnight details: the pending flag, the history and the gross amount repeat other fields', () => {
   const interest = { id: 'd9', cashTransactionType: 'INTEREST', status: 'SETTLED', amount: 11.05, currency: 'EUR', __typename: 'SavingsAccountCashTransactionSummary' };
   const details = {
     __typename: 'SavingsAccountCashTransaction',
@@ -316,9 +316,20 @@ test('the overnight details: the history is written; the pending flag and the gr
     taxDetails: { grossAmount: 14.93, taxAmount: 3.88, __typename: 'TaxDetails' },
   };
   const row = mapping.mapDepositTransaction(interest, 1, CONTEXT, { status: 'yes', details });
-  assert.equal(row.lf_transaction_history, '[{"state":"SETTLED","timestamp":1727740800000}]');
   assert.deepEqual([row.amount, row.tax], ['11,05', '3,88'], 'net amount and tax: the gross amount is their sum');
   for (const name of NEVER_WRITTEN) assert.equal(row[name], undefined, name);
   assert.deepEqual(mapping.extraColumns([row]), [], 'every field the page returns has its place');
   assert.ok(!Object.keys(row).some((name) => /typename/.test(name)));
+});
+
+test('each file has only the columns of its account', () => {
+  const names = (rows) => mapping.columnsFor(rows).map((column) => column.name);
+  const BROKER_ONLY = ['lf_ordered_shares', 'lf_transaction_fee', 'lf_venue_fee', 'lf_crypto_spread_fee', 'lf_trading_venue'];
+  const deposit = mapping.mapDepositTransaction({ id: 'd1', cashTransactionType: 'WITHDRAWAL', status: 'SETTLED', amount: 1, currency: 'EUR' }, 1, CONTEXT);
+  const broker = mapping.mapBrokerTransaction(savingsPlanBuy(), { status: 'yes', details: buyDetails() }, CONTEXT);
+  assert.deepEqual(names([deposit]).slice(0, 14), mapping.PRIME_COLUMNS.map((column) => column.name), 'the official columns stay, empty or not');
+  assert.deepEqual(names([deposit]).slice(14), ['lf_account', 'lf_account_index', 'lf_id', 'lf_subtype', 'lf_status', 'lf_is_cancellation', 'lf_details', 'lf_exporter', 'lf_format']);
+  for (const name of BROKER_ONLY) assert.ok(names([broker]).includes(name), name);
+  assert.deepEqual(names([broker, deposit]), names([broker]), 'rows of both accounts: every column');
+  assert.ok(mapping.LF_COLUMNS.filter((column) => column.account).every((column) => BROKER_ONLY.includes(column.name)));
 });
