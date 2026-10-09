@@ -107,6 +107,10 @@
     const pacing = Object.assign({}, DEFAULT_PACING, options.pacing || {});
     const log = options.log || (() => {});
     let requestCount = 0;
+    // One request at a time for the whole export: the two accounts are read side by side,
+    // and their requests still go one by one, with a pause between them. A request waiting
+    // on a retry, after "too many requests" too, holds the others back.
+    let turn = Promise.resolve();
 
     function checkAborted() {
       if (signal && signal.aborted) throw new ExportError('cancelled');
@@ -116,9 +120,23 @@
       if (ms > 0) await sleep(ms, signal);
     }
 
+    async function send(path, label, init, logPath) {
+      const previous = turn;
+      let release;
+      turn = new Promise((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await sendNow(path, label, init, logPath);
+      } finally {
+        release();
+      }
+    }
+
     // One paced request; network errors, 429 and 5xx are retried, 401 and 403 are not.
     // logPath replaces the path in the logs when the path holds an identifier.
-    async function send(path, label, init, logPath) {
+    async function sendNow(path, label, init, logPath) {
       const shownPath = logPath || safePath(path);
       for (let attempt = 1; ; attempt++) {
         checkAborted();

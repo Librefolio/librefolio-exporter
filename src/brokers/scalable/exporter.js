@@ -186,14 +186,30 @@
     const sections = [];
     if (options.broker) sections.push(['broker', exportBroker]);
     if (options.deposit) sections.push(['deposit', exportDeposit]);
-    for (const [account, run] of sections) {
-      try {
-        const result = await run({ api, ids, options, progress: report, context: rowContext, diagnostics: note });
-        outcome[account] = result.rows;
-        outcome.warnings.push(...result.warnings);
-      } catch (error) {
+    // The accounts are read side by side, so that both show their progress from the start;
+    // the client still sends one request at a time. accountDone and accountFailed tell the
+    // progress when an account is over.
+    const results = await Promise.all(
+      sections.map(([account, run]) =>
+        run({ api, ids, options, progress: report, context: rowContext, diagnostics: note }).then(
+          (result) => {
+            report('accountDone', account, result.rows.length);
+            return { account, result };
+          },
+          (error) => {
+            if (!(error && error.code === 'cancelled')) report('accountFailed', account);
+            return { account, error };
+          },
+        ),
+      ),
+    );
+    for (const { account, result, error } of results) {
+      if (result === undefined) {
         if (error && error.code === 'cancelled') throw error;
         outcome.errors.push({ account, error });
+      } else {
+        outcome[account] = result.rows;
+        outcome.warnings.push(...result.warnings);
       }
     }
     // Fields of the web app that this version does not know yet: their names, never values.

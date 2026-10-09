@@ -8,7 +8,9 @@ Export your **Scalable Capital** transactions to CSV files for
 - 🧪 Early preview (0.x), installed by hand.
 - 🤝 Not affiliated with, or endorsed by, Scalable Capital.
 
-![The LibreFolio button on the Scalable pages](docs/images/button.png)
+<p align="center">
+  <img src="docs/images/button.png" alt="The LibreFolio button on the Scalable pages" width="190">
+</p>
 
 ## 📥 Install
 
@@ -22,12 +24,12 @@ Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 3. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
    **Developer mode**, top right:
 
-   ![Developer mode and the Load unpacked button](docs/images/install-developer-mode.png)
+   <p align="center"><img src="docs/images/install-developer-mode.png" alt="Developer mode and the Load unpacked button" width="600"></p>
 
 4. Click **Load unpacked** and choose the `librefolio-exporter` folder. The extension
    appears in the list:
 
-   ![The extension in chrome://extensions](docs/images/install-extension-card.png)
+   <p align="center"><img src="docs/images/install-extension-card.png" alt="The extension in chrome://extensions" width="380"></p>
 
    The ID changes from one computer to another: it depends on the folder.
 
@@ -94,11 +96,19 @@ To install a new version later, see [Update](#-update).
 2. Click it, choose the accounts and the period, and click **Export CSV**.
 3. Choose where to save in Chrome's *Save as* window: any folder.
 
-With both accounts you get one ZIP holding the two CSV files: double-click it to extract
-them. **Show in Finder**, at the end of the export, opens its folder. With one account
-you get its CSV file.
+The two accounts are read side by side, each with its row of progress. With both
+accounts you get one ZIP holding the two CSV files: double-click it to extract them.
+With one account you get its CSV file. At the end the panel lists what was saved, folds
+the list after a few seconds and keeps **Show folder**, which opens the folder.
 
-<img src="docs/images/panel.png" alt="The panel after an export" width="400">
+<div align="center">
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/panel-progress.png" alt="The panel while exporting" width="300"><br><sub>While exporting: one row per account</sub></td>
+    <td align="center"><img src="docs/images/panel.png" alt="The panel after an export" width="300"><br><sub>Done: the file, what it holds, its folder</sub></td>
+  </tr>
+</table>
+</div>
 
 The first export reads the whole history. The next ones start from the last export
 (**Since last**), so only new transactions are read.

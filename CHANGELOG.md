@@ -30,11 +30,12 @@ First preview, installed by hand.
   holding the CSV files of both accounts. The start of the file names can be changed,
   and the panel shows the names of the next export. Files keep their names when another
   extension renames downloads.
-- Accounts chosen with two tiles; a progress bar with the current step while exporting,
-  and the details in one collapsed group of the browser console.
-- At the end, a green list of the saved file, the CSV files it holds and its folder, with
-  a button that shows it in Finder or Explorer. An account counts as exported only once
-  the file is saved.
+- Accounts chosen with two tiles. The two accounts are read side by side, each with its
+  row of progress and current step, while the requests still go one at a time; the
+  details are in one collapsed group of the browser console.
+- At the end, a green list of the saved file, the CSV files it holds and its folder; it
+  folds to one line after a few seconds, and **Show folder** opens the folder. An account
+  counts as exported only once the file is saved.
 - Period selection with the 1M, 3M, 1Y, All and "since last" buttons, the last one per
   account so that nothing is skipped; **To** defaults to today, and the form keeps its
   values across pages for the day. After the first export, only new transactions are read.

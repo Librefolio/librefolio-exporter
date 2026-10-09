@@ -23,8 +23,14 @@
     saveDialog: true,
   };
   const ACCOUNTS = ['broker', 'deposit'];
-  // Progress steps that report (done, total): the bar can show how far they are.
-  const COUNTED_STEPS = new Set(['progressDeposit', 'progressBrokerDetails', 'progressDepositDetails']);
+  // Progress of each account, from the exporter's steps: the text of its row in the panel
+  // and, for the steps that count, how far it is.
+  const STEPS = {
+    progressBrokerList: (page) => ({ account: 'broker', text: t('stepPage', page) }),
+    progressBrokerDetails: (current, total) => ({ account: 'broker', text: t('stepDetails', current, total), fraction: (current - 1) / total }),
+    progressDeposit: (index, total) => ({ account: 'deposit', text: total > 1 ? t('stepAccount', index, total) : t('stepTransactions') }),
+    progressDepositDetails: (current, total) => ({ account: 'deposit', text: t('stepDetails', current, total), fraction: (current - 1) / total }),
+  };
   const SAVE_POLL_MS = 500;
   const SAVE_WAIT_MS = 15 * 60 * 1000;
   const ERROR_KEYS = {
@@ -269,6 +275,24 @@
     return { ok: true, id: started.id, folder: chosen.directory };
   }
 
+  // The exporter's steps: the full message in the console, the short one in the account's
+  // row; accountDone and accountFailed close the row.
+  function onProgress(key, ...args) {
+    if (key === 'accountDone') {
+      const [account, count] = args;
+      log('account-done', { account, rows: count });
+      ui.setAccountProgress(account, 1, t(account === 'broker' ? 'stepDoneBroker' : 'stepDoneDeposit', count), 'done');
+      return;
+    }
+    if (key === 'accountFailed') {
+      ui.setAccountProgress(args[0], 1, t('stepFailed'), 'error');
+      return;
+    }
+    log(t(key, ...args));
+    const step = STEPS[key] ? STEPS[key](...args) : null;
+    if (step) ui.setAccountProgress(step.account, Number.isFinite(step.fraction) ? step.fraction : null, step.text);
+  }
+
   // The last saved file, in its folder (Finder, Explorer).
   function onShowFile() {
     if (lastSavedId !== null) message({ type: 'lfx:show-download', id: lastSavedId });
@@ -371,11 +395,7 @@
         ids,
         options,
         context: { exporter: `${EXPORTER_ID}/${version}` },
-        progress: (key, ...args) => {
-          const label = t(key, ...args);
-          log(label);
-          ui.setProgress(COUNTED_STEPS.has(key) && args[1] > 0 ? args[0] / args[1] : null, label);
-        },
+        progress: onProgress,
         diagnostics: log,
       });
 
@@ -407,7 +427,7 @@
       let saved = null;
       if (files.length > 0) {
         const output = await exportFile(files, names);
-        if (settings.saveDialog !== false) ui.setProgress(null, t(output.archive ? 'progressSavingZip' : 'progressSavingOne'));
+        if (settings.saveDialog !== false) ui.setProgressLabel(t(output.archive ? 'progressSavingZip' : 'progressSavingOne'));
         saved = await saveFile(output, settings);
         lastSavedId = saved.ok && typeof saved.id === 'number' ? saved.id : null;
         if (saved.ok) {
@@ -459,7 +479,7 @@
         today: () => LFX.format.todayBerlin(),
         shiftMonths: LFX.format.shiftMonths,
         fileNames: (prefix) => LFX.files.fileNames(prefix, LFX.format.fileTimestamp()),
-        showLabel: t(/mac/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '') ? 'showInFinder' : 'showInFolder'),
+        showLabel: t('showFolder'),
         onShowFile,
         onOpen,
         onExport,

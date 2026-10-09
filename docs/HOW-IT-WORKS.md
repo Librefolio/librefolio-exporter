@@ -12,6 +12,9 @@ The broker account is read with the same queries as the web page, page by page. 
 details of each executed trade (price, fees, taxes) cost one request each and can be
 turned off in the panel.
 
+The two accounts are read side by side, each with its row of progress in the panel, so
+that both start at once; their requests still go to Scalable one at a time.
+
 ## 🐷 The overnight account
 
 From the browser, Scalable's interest app answers only the queries that its own pages
@@ -42,18 +45,19 @@ while you move between pages, for the current day.
 - Each export is one file, saved with Chrome's *Save as* window, in any folder: the CSV
   file of the account or, with both accounts, one ZIP holding the two CSV files. One file
   needs one window, wherever you save it.
-- Double-click the ZIP to extract it (*Extract all* on Windows). **Show in Finder**
-  (*Show in folder* elsewhere), at the end of the export, opens its folder. The extension
-  cannot extract it by itself: writing files outside the download folder would need
-  Chrome's permission to edit files on your computer.
+- Double-click the ZIP to extract it (*Extract all* on Windows). **Show folder**, at the
+  end of the export, opens its folder in Finder or Explorer. The extension cannot extract
+  it by itself: writing files outside the download folder would need Chrome's permission
+  to edit files on your computer.
 - Under *Saving* you can change the start of the file names (`scalable` by default); the
   panel shows the names of the next export.
 - A file larger than about 2 MB is saved by the page itself, into the download folder;
   rare, since the ZIP is compressed.
 - Files keep their names even when another extension renames downloads.
 
-At the end, a green list shows the file, the CSV files it holds and its folder. If you
-close the *Save as* window, nothing is saved and the accounts do not count as exported.
+At the end, a green list shows the file, the CSV files it holds and its folder; after a
+few seconds it folds to one line, and **Show folder** stays. If you close the *Save as*
+window, nothing is saved and the accounts do not count as exported.
 
 ## 🔄 Update check
 
@@ -70,7 +74,7 @@ works again later.
 |---|---|
 | Access to `*.scalable.capital` (content script) | Show the button and read your transactions from the web app. The login (`secure.scalable.capital`) and MCP hosts are excluded. |
 | `storage` | Remember your settings, the date of each account's last export, the update-check result, the portfolio and overnight accounts seen on the pages and the location of the download folder; until the browser closes, the query of the overnight account's list. |
-| `downloads` | Save the export with Chrome's *Save as* window and, when you click **Show in Finder**, show it in its folder. The extension also gives its own files their names when another extension renames downloads. It leaves other downloads untouched. |
+| `downloads` | Save the export with Chrome's *Save as* window and, when you click **Show folder**, show it in its folder. The extension also gives its own files their names when another extension renames downloads. It leaves other downloads untouched. |
 
 No other host and no other permission. At install time Chrome warns that the extension
 can read and change data on `scalable.capital` sites and manage your downloads: that is

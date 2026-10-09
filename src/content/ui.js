@@ -59,7 +59,17 @@ p { margin: 6px 0; }
 .tile-check { position: absolute; top: 6px; right: 6px; display: none; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 50%; background: #2f6b3a; color: #fff; }
 .tile[aria-pressed="true"] .tile-check { display: inline-flex; }
-.progress { position: relative; height: 6px; margin-top: 12px; border-radius: 999px; background: rgba(127, 127, 127, 0.22); overflow: hidden; }
+.progress-box { display: grid; gap: 8px; margin-top: 12px; }
+.progress-head { display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.progress-head strong { font-weight: 600; white-space: nowrap; }
+.progress-head .step { margin-left: auto; color: #52606d; text-align: right; overflow-wrap: anywhere; }
+.progress-row.done .step { color: #2f6b3a; }
+.progress-row.error .step { color: #b42318; }
+.dot { flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; }
+.dot.broker, .progress-row.broker .bar { background: #3a63a8; }
+.dot.deposit, .progress-row.deposit .bar { background: #e8781e; }
+.progress-row.error .bar { background: #b42318; }
+.progress { position: relative; height: 6px; margin-top: 4px; border-radius: 999px; background: rgba(127, 127, 127, 0.22); overflow: hidden; }
 .progress .bar { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: 999px; background: #2f6b3a; transition: width 0.2s ease; }
 .progress.indeterminate .bar { width: 35%; animation: lfx-slide 1.2s ease-in-out infinite; }
 @keyframes lfx-slide { from { left: -35%; } to { left: 100%; } }
@@ -76,13 +86,20 @@ input:disabled { opacity: 0.55; }
 .actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .actions .primary { margin-left: auto; }
 .progress-label { margin: 6px 0 0; }
-.result-archive { margin: 10px 0 0; color: #2f6b3a; overflow-wrap: anywhere; }
-.result { margin: 10px 0 0; padding: 0; list-style: none; color: #2f6b3a; }
+.result-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; }
+.result-details { flex: 1 1 220px; min-width: 0; }
+.result-details[open] { flex-basis: 100%; }
+.result-details[open] > .result-summary { display: none; }
+.result-summary { color: #2f6b3a; cursor: pointer; list-style: none; overflow-wrap: anywhere; }
+.result-summary::-webkit-details-marker { display: none; }
+.result-summary::before { content: '▸ '; }
+.result-archive { margin: 0; color: #2f6b3a; overflow-wrap: anywhere; }
+.result { margin: 0; padding: 0; list-style: none; color: #2f6b3a; }
 .result.in-archive { margin-top: 4px; padding-left: 18px; }
 .result li { margin: 4px 0; overflow-wrap: anywhere; }
 .result .what { color: inherit; }
-.result-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 6px 0 0; }
-.result-folder { flex: 1; min-width: 0; margin: 0; color: #2f6b3a; font-size: 12px; overflow-wrap: anywhere; }
+.result-folder { margin: 6px 0 0; color: #2f6b3a; font-size: 12px; overflow-wrap: anywhere; }
+.result-box .small-button { flex: none; margin-left: auto; }
 .primary, .secondary { padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .primary { border: none; background: #2f6b3a; color: #fff; }
 .primary:disabled { background: #9aa5b1; cursor: not-allowed; }
@@ -105,7 +122,7 @@ a { color: #3a63a8; }
   footer { border-top-color: #3e4c59; }
   .warnings { color: #f7c27a; }
   .status.error { color: #ff8a80; }
-  .status.success, .result, .result-archive, .result-folder { color: #8fd19e; }
+  .status.success, .result, .result-archive, .result-folder, .result-summary, .progress-row.done .step { color: #8fd19e; }
   a { color: #8fb5ec; }
 }
 `;
@@ -178,6 +195,9 @@ a { color: #3a63a8; }
     else badge.hidden = true;
     return badge;
   }
+
+  // The list of saved files folds to one line after this long.
+  const RESULT_FOLD_MS = 8000;
 
   function create(options) {
     const t = options.t;
@@ -326,13 +346,41 @@ a { color: #3a63a8; }
 
     const exportButton = el('button', { class: 'primary', type: 'button', disabled: true, 'data-testid': 'lfx-export', text: t('exportButton') });
     const cancelButton = el('button', { class: 'secondary', type: 'button', hidden: true, 'data-testid': 'lfx-cancel', text: t('cancelButton') });
-    const progressBar = el('div', { class: 'bar' });
-    const progress = el('div', { class: 'progress indeterminate', role: 'progressbar', hidden: true, 'aria-label': t('exporting'), 'data-testid': 'lfx-progress' }, [progressBar]);
+    // Progress: one row per account, read side by side.
+    function progressRow(account) {
+      const name = t(account === 'broker' ? 'accountBroker' : 'accountDeposit');
+      const bar = el('div', { class: 'bar' });
+      const track = el('div', { class: 'progress indeterminate', role: 'progressbar', 'aria-label': name }, [bar]);
+      const step = el('span', { class: 'step', 'aria-live': 'polite', 'data-testid': `lfx-progress-${account}-step` });
+      const row = el('div', { class: `progress-row ${account}`, hidden: true, 'data-testid': `lfx-progress-${account}` }, [
+        el('div', { class: 'progress-head' }, [el('span', { class: `dot ${account}` }), el('strong', { text: name }), step]),
+        track,
+      ]);
+      return { account, row, bar, track, step };
+    }
+    const progressRows = { broker: progressRow('broker'), deposit: progressRow('deposit') };
+    const progress = el('div', { class: 'progress-box', hidden: true, 'data-testid': 'lfx-progress' }, [progressRows.broker.row, progressRows.deposit.row]);
+
+    function showAccountProgress(entry, fraction, text, kind) {
+      const known = typeof fraction === 'number' && Number.isFinite(fraction);
+      const percent = known ? Math.round(Math.min(1, Math.max(0, fraction)) * 100) : 0;
+      entry.track.className = known ? 'progress' : 'progress indeterminate';
+      entry.bar.style.width = known ? `${percent}%` : '';
+      entry.track.setAttribute('aria-valuenow', known ? String(percent) : '');
+      entry.step.textContent = text || '';
+      entry.row.className = kind ? `progress-row ${entry.account} ${kind}` : `progress-row ${entry.account}`;
+    }
     const progressLabel = el('p', { class: 'hint progress-label', hidden: true, 'aria-live': 'polite', 'data-testid': 'lfx-progress-label' });
+    // The saved file: in full, then folded to one line after a few seconds; the button that
+    // shows its folder stays.
+    const resultSummary = el('summary', { class: 'result-summary', 'data-testid': 'lfx-result-summary' });
     const resultArchive = el('p', { class: 'result-archive', hidden: true, 'data-testid': 'lfx-result-archive' });
     const result = el('ul', { class: 'result', hidden: true, 'data-testid': 'lfx-result' });
     const resultFolder = el('p', { class: 'result-folder', hidden: true, 'data-testid': 'lfx-result-folder' });
+    const resultDetails = el('details', { class: 'result-details', 'data-testid': 'lfx-result-details' }, [resultSummary, resultArchive, result, resultFolder]);
     const showButton = el('button', { class: 'small-button', type: 'button', hidden: true, 'data-testid': 'lfx-result-show', text: options.showLabel || '' });
+    const resultBox = el('div', { class: 'result-box', hidden: true, 'data-testid': 'lfx-result-box' }, [resultDetails, showButton]);
+    let foldTimer = null;
     const status = el('div', { class: 'status', role: 'status', 'aria-live': 'polite', 'data-testid': 'lfx-status' });
     const warnings = el('ul', { class: 'warnings', hidden: true, 'data-testid': 'lfx-warnings' });
     const riskFooterLink = el('a', { href: options.infoUrl, target: '_blank', rel: 'noopener noreferrer', hidden: true, text: t('riskLink') });
@@ -359,9 +407,7 @@ a { color: #3a63a8; }
       progress,
       progressLabel,
       status,
-      resultArchive,
-      result,
-      el('div', { class: 'result-row' }, [resultFolder, showButton]),
+      resultBox,
       warnings,
       el('footer', {}, [el('div', {}, [t('notAffiliated'), ' ', riskFooterLink])]),
     ]);
@@ -483,17 +529,24 @@ a { color: #3a63a8; }
         }
         progress.hidden = !state.busy;
         progressLabel.hidden = !state.busy;
-        if (state.busy) api.setProgress(null, '');
+        if (state.busy) {
+          const chosen = formValues();
+          for (const entry of Object.values(progressRows)) {
+            entry.row.hidden = !chosen[entry.account];
+            showAccountProgress(entry, null, '');
+          }
+          progressLabel.textContent = '';
+        }
         refreshExportButton();
       },
-      // fraction: from 0 to 1, or null while the amount of work is not known; label: the step.
-      setProgress(fraction, label) {
-        if (label !== undefined) progressLabel.textContent = label || '';
-        const known = typeof fraction === 'number' && Number.isFinite(fraction);
-        progress.className = known ? 'progress' : 'progress indeterminate';
-        const percent = known ? Math.round(Math.min(1, Math.max(0, fraction)) * 100) : 0;
-        progressBar.style.width = known ? `${percent}%` : '';
-        progress.setAttribute('aria-valuenow', known ? String(percent) : '');
+      // fraction: from 0 to 1, or null while the amount of work is not known; text: the step;
+      // kind: 'done' or 'error' when the account is over.
+      setAccountProgress(account, fraction, text, kind) {
+        if (progressRows[account]) showAccountProgress(progressRows[account], fraction, text, kind);
+      },
+      // What happens after the accounts are read, such as Chrome's "Save as" window.
+      setProgressLabel(text) {
+        progressLabel.textContent = text || '';
       },
       setStatus(text, kind) {
         status.textContent = text || '';
@@ -504,6 +557,16 @@ a { color: #3a63a8; }
       setResult(items, folder, extra) {
         const list = Array.isArray(items) ? items : [];
         const more = extra || {};
+        clearTimeout(foldTimer);
+        resultBox.hidden = list.length === 0;
+        resultDetails.open = true;
+        const saved = more.archive || (list.length === 1 ? list[0].name : '');
+        resultSummary.textContent = saved ? `✅ ${t('resultSaved', saved)}` : '';
+        if (list.length > 0) {
+          foldTimer = setTimeout(() => {
+            resultDetails.open = false;
+          }, RESULT_FOLD_MS);
+        }
         resultArchive.textContent = list.length > 0 && more.archive ? `📦 ${t('archiveWith', more.archive)}` : '';
         resultArchive.hidden = !resultArchive.textContent;
         result.className = resultArchive.textContent ? 'result in-archive' : 'result';

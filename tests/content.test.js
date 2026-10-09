@@ -381,6 +381,7 @@ function createPage(options) {
   );
   const page = { anchorDownloads: [], blobs: new Map(), calls: [], intervals: [], logs: [], groups: [], groupEnds: 0, messages: [], override: null, server: settings.server || {} };
   page.background = settings.background || createBackground();
+  const server = scalableServer(page.calls, page.server);
   page.stored = page.background.local;
 
   const documentElement = new FakeNode('html', page);
@@ -432,7 +433,16 @@ function createPage(options) {
     location: { origin: ORIGIN, pathname: settings.pathname, search: settings.search },
     sessionStorage: fakeStorage(settings.session),
     localStorage: fakeStorage({}),
-    fetch: scalableServer(page.calls, page.server),
+    fetch: async (...args) => {
+      page.inFlight = (page.inFlight || 0) + 1;
+      page.maxInFlight = Math.max(page.maxInFlight || 0, page.inFlight);
+      try {
+        await new Promise((resolve) => setImmediate(resolve));
+        return await server(...args);
+      } finally {
+        page.inFlight--;
+      }
+    },
     URL: Object.assign(
       function (...args) {
         return new URL(...args);
@@ -567,6 +577,15 @@ function callNames(page) {
   return page.calls.map((call) => `${call.operation} ${call.path}`);
 }
 
+// The requests of one account, in their order: the two accounts are read side by side.
+function accountCalls(page, account) {
+  return callNames(page).filter((name) => name.includes('/broker/') === (account === 'broker'));
+}
+
+function findCall(page, operation) {
+  return page.calls.find((call) => call.operation === operation);
+}
+
 function warningTexts(page) {
   return page.find('lfx-warnings').children.map((node) => node.textContent);
 }
@@ -606,20 +625,30 @@ test('the content scripts export both accounts end to end', async () => {
   assert.deepEqual(resultLines(page), [`✅ ${brokerFile.name} — 2 transazioni del conto broker`, `✅ ${depositFile.name} — 2 movimenti del conto deposito`]);
   assert.equal(find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents/Finanza');
   assert.equal(find('lfx-result-show').hidden, false);
-  assert.equal(find('lfx-result-show').textContent, 'Mostra nella cartella');
+  assert.equal(find('lfx-result-show').textContent, 'Mostra cartella');
   find('lfx-result-show').click();
   await settle(() => page.background.shown.length === 1);
   assert.deepEqual(page.background.shown, [saved.id], 'the ZIP is shown in its folder');
   assert.equal(find('lfx-progress').hidden, true, 'the progress bar is shown only while exporting');
   assert.equal(find('lfx-warnings').hidden, true, warningTexts(page).join(' | '));
 
-  assert.deepEqual(callNames(page), [...BROKER_CALLS, 'GET /interest/overnight/sav-123456/transactions/', ...DEPOSIT_CALLS]);
+  assert.deepEqual(accountCalls(page, 'broker'), BROKER_CALLS);
+  assert.deepEqual(accountCalls(page, 'deposit'), ['GET /interest/overnight/sav-123456/transactions/', ...DEPOSIT_CALLS]);
+  assert.equal(callNames(page)[1], 'GET /interest/overnight/sav-123456/transactions/', 'side by side: the overnight account starts with the broker');
+  assert.equal(page.maxInFlight, 1, 'and the requests still go one at a time');
   assert.ok(page.calls.every((call) => call.credentials === 'same-origin'));
-  assert.equal(page.calls[2].redirect, 'manual');
-  assert.equal(page.calls[0].variables.personId, 'person-123456');
-  assert.equal(page.calls[0].variables.portfolioId, 'pf-123456');
-  assert.deepEqual(page.calls[3].variables, DEPOSIT_RECIPE.variables, 'the list is read with the page’s own variables');
-  assert.deepEqual(page.calls[4].variables, { personId: 'short-123456', savingsAccountId: 'sav-123456', transactionId: 'd1' });
+  assert.equal(findCall(page, 'GET').redirect, 'manual');
+  assert.equal(findCall(page, 'moreTransactions').variables.personId, 'person-123456');
+  assert.equal(findCall(page, 'moreTransactions').variables.portfolioId, 'pf-123456');
+  assert.deepEqual(findCall(page, 'Transactions').variables, DEPOSIT_RECIPE.variables, 'the list is read with the page’s own variables');
+  assert.deepEqual(findCall(page, 'OvernightTransactionDetails').variables, { personId: 'short-123456', savingsAccountId: 'sav-123456', transactionId: 'd1' });
+
+  assert.equal(find('lfx-progress-broker-step').textContent, '✓ 2 transazioni');
+  assert.equal(find('lfx-progress-deposit-step').textContent, '✓ 2 movimenti');
+  assert.equal(find('lfx-progress-deposit').className, 'progress-row deposit done');
+  await settle(() => find('lfx-result-details').open === false);
+  assert.equal(find('lfx-result-summary').textContent, `✅ ${saved.filename} salvato`, 'the list folds to one line');
+  assert.equal(find('lfx-result-show').hidden, false, 'the folder button stays');
 
   assert.equal(page.anchorDownloads.length, 0, 'saved by the extension, not by the page');
 
@@ -673,7 +702,8 @@ test('on the Transactions page the recipe is read from the page, and remembered 
   await openPanel(transactionsPage);
   await acceptRiskAndExport(transactionsPage);
   assert.equal(transactionsPage.find('lfx-result').hidden, false, transactionsPage.find('lfx-status').textContent);
-  assert.deepEqual(callNames(transactionsPage), [...BROKER_CALLS, ...DEPOSIT_CALLS], 'no page download');
+  assert.deepEqual(accountCalls(transactionsPage, 'broker'), BROKER_CALLS);
+  assert.deepEqual(accountCalls(transactionsPage, 'deposit'), DEPOSIT_CALLS, 'no page download');
   assert.deepEqual(logged(transactionsPage, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'remembered', overnight: 'page', overnightAccounts: 1, overnightRecipes: ['page'] }]);
   assertNoSecrets(transactionsPage);
 
@@ -682,7 +712,8 @@ test('on the Transactions page the recipe is read from the page, and remembered 
   home.find('lfx-preset-all').click();
   await acceptRiskAndExport(home);
   assert.equal(home.find('lfx-result').hidden, false);
-  assert.deepEqual(callNames(home), [...BROKER_CALLS, ...DEPOSIT_CALLS]);
+  assert.deepEqual(accountCalls(home, 'broker'), BROKER_CALLS);
+  assert.deepEqual(accountCalls(home, 'deposit'), DEPOSIT_CALLS);
   assert.deepEqual(logged(home, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'remembered', overnight: 'remembered', overnightAccounts: 1, overnightRecipes: ['memory'] }]);
 });
 
@@ -714,7 +745,11 @@ test('a security check on the Transactions page asks the user to open it', async
     'Conto deposito: Apri su Scalable la pagina «Transazioni» del conto deposito, poi esporta da lì.',
     'Dettagli tecnici: depositPage: redirect',
   ]);
-  assert.deepEqual(callNames(page), [...BROKER_CALLS, 'GET /interest/overnight/sav-123456/transactions/'], 'the redirect is not followed');
+  assert.deepEqual(accountCalls(page, 'broker'), BROKER_CALLS);
+  assert.deepEqual(accountCalls(page, 'deposit'), ['GET /interest/overnight/sav-123456/transactions/'], 'the redirect is not followed');
+  assert.equal(page.find('lfx-progress-deposit-step').textContent, 'Non letto');
+  assert.equal(page.find('lfx-progress-deposit').className, 'progress-row deposit error');
+  assert.equal(page.find('lfx-progress-broker-step').textContent, '✓ 2 transazioni');
   const files = page.background.files();
   assert.equal(files.length, 1);
   assert.match(files[0].filename, /^scalable-broker_\S+\.csv$/, 'one account: its CSV, without a ZIP');

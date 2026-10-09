@@ -22,7 +22,8 @@ The extension keeps the risk low:
 
 - it only runs when you click, inside your own logged-in browser;
 - it never touches your credentials, cookies or two-factor codes;
-- requests go one at a time, with a random pause of 0.3–0.7 seconds between them, and
+- requests go one at a time, with a random pause of 0.3–0.7 seconds between them, even
+  while the two accounts are read side by side, and
   it backs off when Scalable answers "too many requests";
 - details cost one request each, per executed trade (fees and taxes) and per interest
   payment of the overnight account (gross amount and tax), and can be turned off;

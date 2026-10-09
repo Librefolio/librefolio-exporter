@@ -216,6 +216,32 @@ test('an aborted signal cancels before any request', async () => {
   assert.equal(calls.length, 0);
 });
 
+test('requests go one at a time, even when the accounts are read side by side', async () => {
+  let inFlight = 0;
+  let most = 0;
+  const order = [];
+  const client = createClient({
+    origin: ORIGIN,
+    sleep: async () => {},
+    random: () => 0,
+    fetchImpl: async (url, init) => {
+      const id = JSON.parse(init.body).variables.transactionId;
+      inFlight++;
+      most = Math.max(most, inFlight);
+      order.push(`${id} sent`);
+      await new Promise((resolve) => setImmediate(resolve));
+      order.push(`${id} answered`);
+      inFlight--;
+      return respond(200, { data: { account: { brokerPortfolio: { transactionDetails: { id } } } } });
+    },
+  });
+  const ids = ['a', 'b', 'c'];
+  const details = await Promise.all(ids.map((transactionId) => client.getTransactionDetails({ personId: 'p', portfolioId: 'pf', transactionId })));
+  assert.deepEqual(details.map((item) => item.id), ids);
+  assert.equal(most, 1);
+  assert.deepEqual(order, ['a sent', 'a answered', 'b sent', 'b answered', 'c sent', 'c answered']);
+});
+
 test('broker transaction details are extracted', async () => {
   const { client, calls } = makeClient([
     () => respond(200, { data: { account: { brokerPortfolio: { transactionDetails: { id: 'a', averagePrice: 10 } } } } }),

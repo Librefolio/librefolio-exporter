@@ -151,6 +151,13 @@ await waitFor('export enabled', () => on('lfx-export', 'function () { return !th
 assert.equal(await on('lfx-risk', visible), false);
 
 await on('lfx-export', click);
+// While reading: one row per account, both moving from the start.
+await waitFor(
+  'both accounts in progress',
+  async () => (await on('lfx-progress-broker-step', 'function () { return this.textContent; }')) && (await on('lfx-progress-deposit-step', 'function () { return this.textContent; }')),
+  10000,
+);
+await shot('panel-progress', await box('lfx-panel'));
 const outcome = await waitFor(
   'export finished',
   async () => {
@@ -168,8 +175,17 @@ assert.match(outcome.items[1], /^✅ scalable-deposit_\S+\.csv — 2 movimenti d
 assert.match(await on('lfx-result-archive', 'function () { return this.textContent; }'), /^📦 scalable_\S+\.zip, con:$/);
 assert.equal(await on('lfx-result-folder', 'function () { return this.textContent; }'), '📁 Cartella: Download');
 assert.equal(await on('lfx-result-show', visible), true, 'the button that shows the file in its folder');
+assert.equal(await on('lfx-result-show', 'function () { return this.textContent; }'), 'Mostra cartella');
+assert.equal(await on('lfx-progress-broker-step', 'function () { return this.textContent; }'), '✓ 2 transazioni');
+assert.equal(await on('lfx-progress-deposit-step', 'function () { return this.textContent; }'), '✓ 2 movimenti');
 await shot('result');
 await shot('panel-result', await box('lfx-panel'));
+// After a few seconds the list folds to one line; the folder button stays.
+await waitFor('result folded', async () => (await on('lfx-result-details', 'function () { return this.open; }')) === false, 15000);
+assert.match(await on('lfx-result-summary', 'function () { return this.textContent; }'), /^✅ scalable_\S+\.zip salvato$/);
+assert.equal(await on('lfx-result-summary', 'function () { return getComputedStyle(this).display !== "none"; }'), true);
+assert.equal(await on('lfx-result-show', visible), true, 'the folder button stays');
+await shot('panel-folded', await box('lfx-panel'));
 
 // Only complete files: Chromium writes into .crdownload first.
 const savedFiles = () => (fs.existsSync(SAVED) ? fs.readdirSync(SAVED).filter((name) => /\.(zip|csv)$/.test(name)).sort() : []);
@@ -207,17 +223,17 @@ const requests = fs
   .trim()
   .split('\n')
   .map((line) => JSON.parse(line));
+const names = requests.map((request) => `${request.operation} ${request.path}`);
 assert.deepEqual(
-  requests.map((request) => `${request.operation} ${request.path}`),
-  [
-    'moreTransactions /broker/api/data',
-    'getTransactionDetails /broker/api/data',
-    `GET ${TRANSACTIONS_PAGE}`,
-    `Transactions ${INTEREST_PATH}`,
-    `OvernightTransactionDetails ${INTEREST_PATH}`,
-  ],
+  names.filter((name) => name.includes('/broker/')),
+  ['moreTransactions /broker/api/data', 'getTransactionDetails /broker/api/data'],
+);
+assert.deepEqual(
+  names.filter((name) => !name.includes('/broker/')),
+  [`GET ${TRANSACTIONS_PAGE}`, `Transactions ${INTEREST_PATH}`, `OvernightTransactionDetails ${INTEREST_PATH}`],
   'the overnight account comes from the link in the page; its list, with the recipe of its Transactions page',
 );
+assert.equal(names[1], `GET ${TRANSACTIONS_PAGE}`, 'the two accounts are read side by side');
 for (const request of requests) {
   assert.equal(request.cookie, true, 'the browser attaches the session cookie by itself');
   assert.equal(request.fetchSite, 'same-origin', 'same-origin requests only');
