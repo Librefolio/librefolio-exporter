@@ -14,78 +14,79 @@ Export your **Scalable Capital** transactions to CSV files for
 
 ## 📥 Install
 
-Chrome, Edge, Brave or another Chromium browser, version 120 or later.
+Chrome, Edge, Brave or another Chromium browser, version 120 or later. Install the
+extension only from this repository's releases.
 
-1. **Download** `librefolio-exporter-<version>.zip` from the
-   [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest).
-2. **Unzip** it and put the `librefolio-exporter` folder you get where it can stay: any
-   folder works, we suggest `Downloads/chromePlugin`. After the installation Chrome always
-   loads the extension from that folder, so don't move or delete it afterwards.
-3. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
+1. **Download** both files of the
+   [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest),
+   `librefolio-exporter-<version>.zip` and `librefolio-exporter-<version>.zip.sha256`,
+   into the same folder: we suggest `Downloads/chromePlugin`. If the browser saves them
+   in `Downloads`, move both there.
+2. **Check** the ZIP. The `.sha256` file is one line: the ZIP's fingerprint, then its
+   name. The command reads that line, looks for the ZIP with that name in the folder the
+   terminal is in, computes its fingerprint and compares the two. That is why both files
+   must be in the same folder, and why the commands start by going there (`cd`).
+
+   <details>
+   <summary>🍎 macOS, in the Terminal app</summary>
+
+   ```sh
+   cd ~/Downloads/chromePlugin
+   shasum -a 256 -c librefolio-exporter-*.zip.sha256
+   ```
+
+   The answer is one line per ZIP, for example `librefolio-exporter-1.0.0.zip: OK`. The
+   `*` stands for the version: each ZIP of the folder that has its `.sha256` is checked.
+
+   </details>
+
+   <details>
+   <summary>🐧 Linux, in a terminal</summary>
+
+   ```sh
+   cd ~/Downloads/chromePlugin
+   sha256sum -c librefolio-exporter-*.zip.sha256
+   ```
+
+   The answer is one line per ZIP, for example `librefolio-exporter-1.0.0.zip: OK`. The
+   `*` stands for the version: each ZIP of the folder that has its `.sha256` is checked.
+
+   </details>
+
+   <details>
+   <summary>🪟 Windows, in PowerShell</summary>
+
+   ```powershell
+   cd $HOME\Downloads\chromePlugin
+   Get-ChildItem librefolio-exporter-*.zip | ForEach-Object {
+     $expected = (Get-Content "$($_.FullName).sha256").Split(' ')[0]
+     "$($_.Name): $((Get-FileHash $_.FullName -Algorithm SHA256).Hash -eq $expected)"
+   }
+   ```
+
+   Windows has no command that reads `.sha256` files, so this one does it step by step:
+   for each ZIP of the folder, it reads the fingerprint in its `.sha256` and compares it
+   with the ZIP's own. The answer is one line per ZIP, for example
+   `librefolio-exporter-1.0.0.zip: True`.
+
+   </details>
+
+   `OK` (`True` on Windows) means the ZIP is exactly the one published here. Anything
+   else, such as `FAILED`, `False` or a missing file: don't install it, and download
+   both files again.
+3. **Unzip** the ZIP in that folder: you get the `librefolio-exporter` folder. Chrome
+   loads the extension from it every time, so don't move or delete it afterwards.
+4. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
    **Developer mode**, top right:
 
    <p align="center"><img src="docs/images/install-developer-mode.png" alt="Developer mode and the Load unpacked button" width="600"></p>
 
-4. Click **Load unpacked** and choose the `librefolio-exporter` folder. The extension
+5. Click **Load unpacked** and choose the `librefolio-exporter` folder. The extension
    appears in the list:
 
    <p align="center"><img src="docs/images/install-extension-card.png" alt="The extension in chrome://extensions" width="380"></p>
 
    The ID changes from one computer to another: it depends on the folder.
-
-> [!TIP]
-> Install the extension only from this repository's releases. Each ZIP comes with a
-> `.sha256` file, its fingerprint: download both into the same folder (here
-> `Downloads`) and check that the ZIP is exactly the one published here, with the
-> commands for your system below.
-
-<details>
-<summary>🍎 Check the ZIP on macOS</summary>
-
-In the Terminal app:
-
-```sh
-cd ~/Downloads
-shasum -a 256 -c librefolio-exporter-*.zip.sha256
-```
-
-The answer must end with `OK`. Anything else: don't install the ZIP, and download it
-again.
-
-</details>
-
-<details>
-<summary>🐧 Check the ZIP on Linux</summary>
-
-In a terminal:
-
-```sh
-cd ~/Downloads
-sha256sum -c librefolio-exporter-*.zip.sha256
-```
-
-The answer must end with `OK`. Anything else: don't install the ZIP, and download it
-again.
-
-</details>
-
-<details>
-<summary>🪟 Check the ZIP on Windows</summary>
-
-In PowerShell:
-
-```powershell
-cd $HOME\Downloads
-Get-ChildItem librefolio-exporter-*.zip | ForEach-Object {
-  $expected = (Get-Content "$($_.FullName).sha256").Split(' ')[0]
-  "$($_.Name): $((Get-FileHash $_.FullName -Algorithm SHA256).Hash -eq $expected)"
-}
-```
-
-The answer must end with `True`. Anything else: don't install the ZIP, and download it
-again.
-
-</details>
 
 To install a new version later, see [Update](#-update).
 
@@ -124,19 +125,21 @@ Each account has its CSV file, `scalable-broker_<date>_<time>.csv` and
 
 The top of the panel tells you when a new version is out. To install it:
 
-1. **Download** the new ZIP from the
+1. **Download** the new ZIP and its `.sha256` from the
    [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest)
-   and **unzip** it.
-2. **Replace** the old `librefolio-exporter` folder with the new one, in the same place
-   (for example `Downloads/chromePlugin`).
+   into the same folder as before, for example `Downloads/chromePlugin`, and
+   [check it](#-install) as at installation.
+2. **Unzip** it there, replacing the old `librefolio-exporter` folder.
 3. Open `chrome://extensions` and click the **reload** button ⟳ on the LibreFolio
    Exporter card (bottom right in the picture above).
 4. **Reload** the Scalable pages you have open (Cmd+R on macOS, F5 elsewhere): until
    then they keep the old version, and its panel asks you to reload.
 
 Your settings and the dates of the last exports stay, as long as the folder stays the
-same: Chrome knows the extension by its folder, and a copy loaded from another folder
-would be a second extension, starting from scratch.
+same: Chrome knows the extension by its folder. A copy loaded from another folder is a
+second extension, starting from scratch, and both put their button on the Scalable
+pages: keep one, and turn the other off or remove it in `chrome://extensions`. Removing
+an extension loaded this way does not delete its folder.
 
 ## 🛡️ Privacy and risks
 
