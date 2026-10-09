@@ -653,7 +653,7 @@ test('the content scripts export both accounts end to end', async () => {
   const lines = brokerFile.text.trimEnd().split('\n');
   assert.equal(lines.length, 3);
   assert.ok(lines[0].startsWith('date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency;lf_account;'));
-  assert.ok(lines[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0;0;EUR;broker;1;t1;'));
+  assert.ok(lines[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0;0;EUR;broker;t1;'));
   assert.ok(lines[2].includes(';"Deposit; ""SEPA""";Cash;Deposit;'));
   assert.ok(lines[1].endsWith(';t1;SAVINGS_PLAN;;;0;;;'), lines[1]);
   const deposit = depositFile.text.trimEnd().split('\n');

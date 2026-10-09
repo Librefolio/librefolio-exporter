@@ -164,8 +164,9 @@
     return COLUMNS.filter(ofTheseAccounts).concat(extraColumns(rows).map((name) => ({ name })));
   }
 
-  // Not fields of the web app: which account, and which of its overnight accounts.
-  const ACCOUNT_COLUMNS = ['lf_account', 'lf_account_index'].map((name) => ({ name }));
+  // Not fields of the web app: which account, and which of its overnight accounts (the
+  // broker has one portfolio).
+  const ACCOUNT_COLUMNS = [{ name: 'lf_account' }, { name: 'lf_account_index', account: 'deposit' }];
 
   // The fixed lf_* columns: the account, then the known fields in order, with the account
   // that fills them when only one does.
@@ -304,7 +305,6 @@
       tax: format.toDecimalComma(tax),
       currency: summary.currency || '',
       lf_account: 'broker',
-      lf_account_index: '1',
       lf_is_cancellation: reversal(summary, details),
       lf_ordered_shares: ordered && ordered !== shares ? ordered : '',
     });

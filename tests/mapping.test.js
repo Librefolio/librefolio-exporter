@@ -68,7 +68,7 @@ test('a savings-plan buy with details maps to Prime columns and verbatim lf_* co
   assert.equal(row.tax, '0');
   assert.equal(row.currency, 'EUR');
   assert.equal(row.lf_account, 'broker');
-  assert.equal(row.lf_account_index, '1');
+  assert.equal(row.lf_account_index, '', 'the broker has one portfolio: no index');
   assert.equal(row.lf_id, 'tx-buy-1');
   assert.equal(row.lf_subtype, 'SAVINGS_PLAN');
   assert.equal(row.lf_is_cancellation, '', 'written only for a reversal');
@@ -319,8 +319,12 @@ test('each file has only the columns of its account', () => {
   assert.deepEqual(names([deposit]).slice(0, 14), mapping.PRIME_COLUMNS.map((column) => column.name), 'the official columns stay, empty or not');
   assert.deepEqual(names([deposit]).slice(14), ['lf_account', 'lf_account_index', 'lf_id', 'lf_subtype', 'lf_is_cancellation']);
   for (const name of BROKER_ONLY) assert.ok(names([broker]).includes(name), name);
-  assert.deepEqual(names([broker, deposit]), names([broker]), 'rows of both accounts: every column');
-  assert.ok(mapping.LF_COLUMNS.filter((column) => column.account).every((column) => BROKER_ONLY.includes(column.name)));
+  assert.ok(!names([broker]).includes('lf_account_index'), 'the index is for the overnight accounts only');
+  assert.deepEqual(names([broker, deposit]), mapping.COLUMNS.map((column) => column.name), 'rows of both accounts: every column');
+  assert.deepEqual(
+    mapping.LF_COLUMNS.filter((column) => column.account).map((column) => column.name).sort(),
+    BROKER_ONLY.concat('lf_account_index').sort(),
+  );
 });
 
 test('a reversal is marked; every other transaction leaves the column empty', () => {

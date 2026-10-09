@@ -72,7 +72,7 @@ details cannot be read, the panel says how many.
 | Column | Field | What it is for |
 |---|---|---|
 | `lf_account` | — | `broker` or `deposit`: which account the file is, whatever its name |
-| `lf_account_index` | — | `1` for the broker; 1, 2… for each overnight account |
+| `lf_account_index` | — | 1, 2… for each overnight account. In the overnight account's file only: the broker has one portfolio |
 | `lf_id` | `id` | The web app's transaction id, stable and unique: it tells apart two transactions that look the same (same day, amount and text) and recognises one already imported. Account ids inside it are masked (see Privacy) |
 | `lf_subtype` | `securityTransactionType`, `cashTransactionType` or `nonTradeSecurityTransactionType` | The exact type: `type` says `Withdrawal` both for a transfer to the overnight account (`CASH_TRANSFER_OUT`) and for one to the bank (`WITHDRAWAL`) |
 | `lf_is_cancellation` | `isCancellation` | `true` when the transaction reverses another one, already booked; empty otherwise. Without it, a reversal looks like any other transaction |

@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-10-09
 
 First release, installed by hand.
 
@@ -23,8 +23,8 @@ First release, installed by hand.
   query of its list seen on the pages are remembered until the browser closes.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
   with what those do not say: transaction id, exact type, reversals, the parts of the
-  fee, the venue ([format](docs/formats/scalable.md)). Every field is written once; the
-  overnight account's file leaves out the columns that only the broker fills. On the
+  fee, the venue ([format](docs/formats/scalable.md)). Every field is written once, and
+  each file leaves out the columns that only the other account fills. On the
   overnight account, whose queries are the web app's own, a field Scalable adds arrives
   as a new column.
 - Privacy: the ids of the person and of the accounts never appear in the files, not even

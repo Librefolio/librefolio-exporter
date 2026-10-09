@@ -207,7 +207,7 @@ assert.deepEqual(
   [`scalable-broker_${stamp}.csv`, `scalable-deposit_${stamp}.csv`],
 );
 const broker = entries[0].text.split('\n');
-assert.ok(broker[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0,99;0;EUR;broker;1;t1;'));
+assert.ok(broker[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0,99;0;EUR;broker;t1;'));
 assert.ok(broker[2].includes(';"Deposit; ""SEPA""";Cash;Deposit;'));
 const deposit = entries[1].text.split('\n');
 assert.ok(deposit[1].startsWith('2026-10-01;01:00:00;Executed;"RI-1";"Interest";Cash;Interest;;;;1,23;;0,44;EUR;deposit;1;d1;'), deposit[1]);
