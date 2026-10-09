@@ -48,6 +48,11 @@ cdp.on('Runtime.consoleAPICalled', (params) => {
 });
 const exceptions = [];
 cdp.on('Runtime.exceptionThrown', (params) => exceptions.push(params.exceptionDetails.exception ? params.exceptionDetails.exception.description : params.exceptionDetails.text));
+// The worlds of the page, among them the one where the extension's content scripts run.
+const contexts = [];
+cdp.on('Runtime.executionContextCreated', (params, eventSession) => {
+  if (eventSession === sessionId) contexts.push(params.context);
+});
 await cdp.send('Runtime.enable', {}, sessionId);
 
 function collect(node, found) {
@@ -208,14 +213,73 @@ for (const request of requests) {
   assert.equal(Boolean(request.features), request.path === '/broker/api/data', 'the feature header goes to the broker only');
 }
 
-const events = consoleLines.map((values) => [values[1], values[2] === undefined ? undefined : JSON.parse(values[2])]);
-const identifiers = events.find(([event]) => event === 'identifiers');
+const events = () => consoleLines.map((values) => [values[1], values[2] === undefined ? undefined : JSON.parse(values[2])]);
+const identifiers = events().find(([event]) => event === 'identifiers');
 assert.deepEqual(identifiers[1], { person: 'sessionStorage', portfolio: 'url', overnight: 'page', overnightAccounts: 1, overnightRecipes: [] });
-assert.deepEqual(events.find(([event]) => event === 'overnight-recipe')[1], { source: 'download', operation: 'Transactions' });
+assert.deepEqual(events().find(([event]) => event === 'overnight-recipe')[1], { source: 'download', operation: 'Transactions' });
+
+// Second export, with Chrome's folder picker. Headless, its window cannot open: in the
+// world of the content scripts, the picker gives a folder of the page's private file system
+// (OPFS), where the extension writes through Chrome's own File System Access code.
+const extensionOrigin = worker.url.replace(/\/src\/background\.js$/, '');
+const world = contexts.find((context) => context.origin === extensionOrigin && context.auxData && context.auxData.type === 'isolated');
+assert.ok(world, `the content scripts' world: ${JSON.stringify(contexts.map((context) => [context.origin, context.auxData]))}`);
+async function inExtensionWorld(expression) {
+  const result = await cdp.send('Runtime.evaluate', { expression, contextId: world.id, awaitPromise: true, returnByValue: true }, sessionId);
+  if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails).slice(0, 600));
+  return result.result.value;
+}
+assert.equal(await inExtensionWorld('typeof showDirectoryPicker'), 'function', 'Chrome gives content scripts the folder picker');
+await inExtensionWorld(`(() => {
+  globalThis.lfxPicks = [];
+  globalThis.showDirectoryPicker = async (options) => {
+    globalThis.lfxPicks.push(options);
+    const storage = await navigator.storage.getDirectory();
+    return storage.getDirectoryHandle('LibreFolio', { create: true });
+  };
+  return true;
+})()`);
+const dialogOn = await cdp.send(
+  'Runtime.evaluate',
+  { expression: 'chrome.storage.local.set({ saveDialog: true }).then(() => true)', awaitPromise: true, returnByValue: true },
+  workerSession,
+);
+assert.equal(dialogOn.result && dialogOn.result.value, true);
+await on('lfx-export', click);
+const folderLine = await waitFor(
+  'export into the folder',
+  async () => {
+    const error = await on('lfx-status', 'function () { return /error/.test(this.className) ? this.textContent : ""; }');
+    if (error) return { error };
+    const line = await on('lfx-result-folder', 'function () { return this.hidden ? "" : this.textContent; }');
+    return line === '📁 Cartella: LibreFolio' ? { line } : null;
+  },
+  30000,
+);
+assert.equal(folderLine.error, undefined, folderLine.error);
+const written = await inExtensionWorld(`(async () => {
+  const folder = await (await navigator.storage.getDirectory()).getDirectoryHandle('LibreFolio');
+  const files = {};
+  for await (const [name, handle] of folder.entries()) files[name] = await (await handle.getFile()).text();
+  return { picks: globalThis.lfxPicks, files };
+})()`);
+assert.deepEqual(written.picks, [{ id: 'librefolio-exporter', mode: 'readwrite', startIn: 'downloads' }]);
+const folderNames = Object.keys(written.files).sort();
+assert.equal(folderNames.length, 2, JSON.stringify(folderNames));
+assert.match(folderNames[0], /^scalable-broker_\S+\.csv$/);
+assert.match(folderNames[1], /^scalable-deposit_\S+\.csv$/);
+assert.equal(written.files[folderNames[0]].split('\n')[1], broker[1], 'the same broker file as through the downloads');
+assert.equal(written.files[folderNames[1]].split('\n')[1], deposit[1], 'the same overnight file as through the downloads');
+assert.deepEqual(csvFiles(), [brokerFile, depositFile], 'nothing more in the download folder');
+assert.deepEqual(events().filter(([event]) => event === 'folder-picker' || event === 'folder-write'), [
+  ['folder-picker', { permission: 'granted' }],
+  ['folder-write', { files: 2 }],
+]);
+
 const consoleText = JSON.stringify(consoleLines);
 for (const secret of SECRETS) assert.ok(!consoleText.includes(secret), `the console must not show ${secret}`);
 
 assert.deepEqual(exceptions, [], 'no uncaught exception in the page');
 
 cdp.close();
-console.log(`✓ real-browser export: ${brokerFile}, ${depositFile}, ${requests.length} requests`);
+console.log(`✓ real-browser export: ${brokerFile}, ${depositFile}, ${requests.length} requests; then ${folderNames.length} files in the chosen folder`);

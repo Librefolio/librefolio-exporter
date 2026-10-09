@@ -385,6 +385,8 @@ function createPage(options) {
       links: ['/interest/overnight/sav-123456'],
       scripts: [],
       server: null,
+      // Chrome's folder picker, window.showDirectoryPicker: absent unless given, as in Brave.
+      picker: undefined,
     },
     options || {},
   );
@@ -442,6 +444,7 @@ function createPage(options) {
     sessionStorage: fakeStorage(settings.session),
     localStorage: fakeStorage({}),
     fetch: scalableServer(page.calls, page.server),
+    showDirectoryPicker: settings.picker,
     URL: Object.assign(
       function (...args) {
         return new URL(...args);
@@ -975,6 +978,148 @@ test('a save failure is reported, and without the extension the page saves the f
   assert.match(page.anchorDownloads[0].name, /^scalable-broker_/);
   assert.match(await page.blobs.get(page.anchorDownloads[1].url).text(), /^date;time;status;/);
   assert.deepEqual(logged(page, 'download-fallback'), [{ reason: 'no answer from the extension' }]);
+});
+
+// A folder chosen in Chrome's picker, in memory: files[name] = text. taken(name) marks the
+// names already in the folder; permission is the answer to Chrome's permission prompt.
+function fakeFolder(name, options = {}) {
+  const failure = (errorName) => Object.assign(new Error(errorName), { name: errorName });
+  const folder = {
+    kind: 'directory',
+    name,
+    files: {},
+    permission: options.permission || 'granted',
+    permissionRequests: 0,
+    queryPermission: async () => (folder.permission === 'granted' ? 'granted' : 'prompt'),
+    requestPermission: async () => {
+      folder.permissionRequests++;
+      return folder.permission;
+    },
+    getFileHandle: async (fileName, settings = {}) => {
+      const exists = fileName in folder.files || Boolean(options.taken && options.taken(fileName));
+      if (!exists && !settings.create) throw failure('NotFoundError');
+      return {
+        kind: 'file',
+        name: fileName,
+        createWritable: async () => {
+          if (options.failWrite) throw failure('NotAllowedError');
+          let text = '';
+          return {
+            write: async (data) => {
+              text += data;
+            },
+            close: async () => {
+              folder.files[fileName] = text;
+            },
+            abort: async () => {},
+          };
+        },
+      };
+    },
+  };
+  return folder;
+}
+
+const PICKER_OPTIONS = { id: 'librefolio-exporter', mode: 'readwrite', startIn: 'downloads' };
+const PICK_LABEL =
+  'Scegli la cartella, per esempio Download/LibreFolio (Download, Documenti e Scrivania in sé non sono ammessi). Chrome chiede il permesso a nome di questa pagina: è l’estensione a scrivere i file.';
+
+// A page with Chrome's folder picker: answer() is what the picker gives; picks records each
+// opening, with the requests already sent to Scalable and the label shown.
+function pageWithPicker(answer) {
+  const picks = [];
+  const page = loadContentScripts(
+    createPage({
+      picker: async (options) => {
+        picks.push({ options: plain(options), requestsBefore: page.calls.length, label: page.find('lfx-progress-label').textContent });
+        return answer();
+      },
+    }),
+  );
+  page.picks = picks;
+  return page;
+}
+
+test('with Chrome’s folder picker, the folder is chosen at the click and both files are written there', async () => {
+  const folder = fakeFolder('Esportazioni');
+  const page = pageWithPicker(async () => folder);
+  await openPanel(page);
+  await acceptRiskAndExport(page);
+  assert.deepEqual(page.picks, [{ options: PICKER_OPTIONS, requestsBefore: 0, label: PICK_LABEL }], 'before anything is read: Chrome opens it only right after the click');
+  const names = Object.keys(folder.files).sort();
+  assert.equal(names.length, 2);
+  assert.match(names[0], /^scalable-broker_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.csv$/);
+  assert.match(names[1], /^scalable-deposit_\S+\.csv$/);
+  assert.ok(folder.files[names[0]].startsWith('date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency;lf_account;'));
+  assert.ok(folder.files[names[1]].includes(';deposit;'));
+  assert.equal(page.background.downloads.length, 0, 'Chrome’s downloads are not used');
+  assert.deepEqual(resultLines(page), [`✅ ${names[0]} — 2 transazioni del conto broker`, `✅ ${names[1]} — 2 movimenti del conto deposito`]);
+  assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: Esportazioni');
+  assert.deepEqual(Object.keys(page.stored.lastExportDates).sort(), ['broker', 'deposit']);
+  assert.deepEqual(logged(page, 'folder-picker'), [{ permission: 'granted' }]);
+  assert.deepEqual(logged(page, 'folder-write'), [{ files: 2 }]);
+  assert.ok(!JSON.stringify(page.logs).includes('Esportazioni'), 'the folder is never logged');
+});
+
+test('closing the folder picker, or refusing Chrome’s permission, exports nothing', async () => {
+  const aborted = pageWithPicker(async () => {
+    throw Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
+  });
+  await openPanel(aborted);
+  await acceptRiskAndExport(aborted);
+  assert.equal(aborted.find('lfx-status').textContent, 'Nessuna cartella scelta: niente esportato.');
+  assert.deepEqual(aborted.calls, [], 'nothing is read');
+  assert.equal(aborted.find('lfx-result').hidden, true);
+  assert.equal(aborted.stored.lastExportDates, undefined);
+  assert.deepEqual(logged(aborted, 'folder-picker'), [{ error: 'AbortError' }]);
+
+  const folder = fakeFolder('Esportazioni', { permission: 'denied' });
+  const denied = pageWithPicker(async () => folder);
+  await openPanel(denied);
+  await acceptRiskAndExport(denied);
+  assert.equal(denied.find('lfx-status').textContent, 'Chrome non ha il permesso di scrivere in quella cartella: niente esportato.');
+  assert.equal(folder.permissionRequests, 1, 'asked once more, still right after the click');
+  assert.deepEqual(denied.calls, []);
+  assert.deepEqual(folder.files, {});
+});
+
+test('a name already in the folder gets a number, and a failed write is reported', async () => {
+  const folder = fakeFolder('Esportazioni', { taken: (name) => /^scalable-broker_\S+\.csv$/.test(name) });
+  const page = pageWithPicker(async () => folder);
+  await openPanel(page);
+  await acceptRiskAndExport(page);
+  const broker = Object.keys(folder.files).find((name) => name.startsWith('scalable-broker_'));
+  assert.match(broker, /^scalable-broker_\S+ \(1\)\.csv$/);
+  assert.equal(resultLines(page)[0], `✅ ${broker} — 2 transazioni del conto broker`, 'the list shows the name written');
+
+  const failing = fakeFolder('Esportazioni', { failWrite: true });
+  const failed = pageWithPicker(async () => failing);
+  await openPanel(failed);
+  await acceptRiskAndExport(failed);
+  assert.equal(failed.find('lfx-status').className, 'status error');
+  assert.match(failed.find('lfx-status').textContent, /^Salvataggio dei file non riuscito: /);
+  assert.equal(failed.find('lfx-result').hidden, true);
+  assert.equal(failed.stored.lastExportDates, undefined, 'nothing written: not exported');
+  assert.deepEqual(logged(failed, 'folder-write'), [{ account: 'broker', error: 'NotAllowedError' }]);
+});
+
+test('when the folder picker cannot open, Chrome’s "Save as" window is used', async () => {
+  const page = pageWithPicker(async () => {
+    throw Object.assign(new Error('Must be handling a user gesture to show a file picker.'), { name: 'SecurityError' });
+  });
+  await openPanel(page);
+  await acceptRiskAndExport(page);
+  assert.equal(page.background.dialogs, 1, 'one "Save as" window, as without the picker');
+  assert.equal(page.background.files().length, 2);
+  assert.equal(resultLines(page).length, 2);
+  assert.deepEqual(logged(page, 'folder-picker'), [{ error: 'SecurityError' }]);
+
+  const automated = pageWithPicker(async () => fakeFolder('X'));
+  automated.stored.saveDialog = false;
+  await openPanel(automated);
+  await acceptRiskAndExport(automated);
+  assert.deepEqual(automated.picks, [], 'automated tests, without windows, skip the picker');
+  assert.equal(automated.background.files().length, 2);
 });
 
 // Chrome cuts the script of an open page off from a reloaded extension: no id, every call fails.

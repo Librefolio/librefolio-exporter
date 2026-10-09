@@ -25,9 +25,12 @@ of real tests. With `SHOTS_DIR=<folder>` it also saves screenshots of the button
 the panel; with `EXTENSION_DIR=<folder>` it loads another copy of the extension, such as
 the unzipped release ZIP.
 
-A headless browser cannot show the *Save as* window: the test turns it off through a
-hidden setting, `saveDialog: false` in `chrome.storage.local`, so that the files go
-straight into the download folder.
+A headless browser cannot show the *Save as* window or the folder picker. The first
+export turns both off through a hidden setting, `saveDialog: false` in
+`chrome.storage.local`, so that the files go straight into the download folder. The
+second export checks that the content scripts' world has `showDirectoryPicker`, then
+replaces it there with a folder of the page's private file system (OPFS): the extension
+writes through Chrome's own File System Access code, and the test reads the files back.
 
 ## 🗂️ Structure
 

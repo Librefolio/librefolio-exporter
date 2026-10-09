@@ -23,10 +23,15 @@ First preview, installed by hand.
   query of its list seen on the pages are remembered until the browser closes.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
   with the original values ([format version 1](docs/FORMAT.md)).
-- One *Save as* window per export: the other file goes into the same folder, without a
-  window when Chrome allows it (inside its download folder); elsewhere Chrome asks again,
-  and the panel says to choose the same folder. The start of the file names can be
-  changed. Files keep their names when another extension renames downloads.
+- Folder picker: at **Export CSV** you choose the folder, and both files are written
+  there (File System Access). Chrome asks for the permission on behalf of the Scalable
+  page; it does not accept Downloads, Documents or Desktop themselves, only folders
+  inside them. The start of the file names can be changed.
+- Where the folder picker is off (Brave) or cannot open, one *Save as* window per
+  export: the other file goes into the same folder, without a window when Chrome allows
+  it (inside its download folder); elsewhere Chrome asks again, and the panel says to
+  choose the same folder. Files keep their names when another extension renames
+  downloads.
 - Accounts chosen with two tiles; a progress bar with the current step while exporting,
   and the details in one collapsed group of the browser console.
 - A green list of the saved files at the end, with what each contains and the folder.

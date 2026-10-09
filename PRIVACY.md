@@ -21,11 +21,17 @@ only adds its own button and panel.
 
 ## What it writes
 
-- The CSV files, saved to your computer through the browser's downloads: the first in
-  the folder you choose in Chrome's *Save as* window, the other next to it. To put it
-  there, the extension may first save it in the browser's download folder, to learn
-  where that folder is, and then remove it from there. A file too large for the
-  browser's download interface is saved by the page into the download folder itself.
+- The CSV files, written in the folder you choose in Chrome's folder picker at each
+  export. The extension holds that folder only while it writes, and never stores it:
+  kept in the page's storage, the Scalable page could reach it. Chrome gives the
+  permission on behalf of the Scalable page, until you close its last tab, and remembers
+  the last folder chosen, so that the picker opens there next time.
+- Without the folder picker (Brave), the CSV files are saved through the browser's
+  downloads: the first in the folder you choose in Chrome's *Save as* window, the other
+  next to it. To put it there, the extension may first save it in the browser's download
+  folder, to learn where that folder is, and then remove it from there. A file too large
+  for the browser's download interface is saved by the page into the download folder
+  itself.
 - In the extension's local storage (`chrome.storage.local`): whether you accepted the
   risk notice, the date of each account's last export, the start of the file names,
   the values of the export form for the current day (period,

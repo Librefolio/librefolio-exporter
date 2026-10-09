@@ -17,8 +17,8 @@ Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 1. **Download** `librefolio-exporter-<version>.zip` from the
    [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest).
 2. **Unzip** it and put the `librefolio-exporter` folder you get where it can stay: any
-   folder works, we suggest `Downloads/chromePlugin`. Chrome loads the extension from
-   that folder, so don't move or delete it afterwards.
+   folder works, we suggest `Downloads/chromePlugin`. After the installation Chrome will loads the extension from
+   that folder alweis, so don't move or delete it afterwards.
 3. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
    **Developer mode**, top right:
 
@@ -33,30 +33,44 @@ Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 
 > [!TIP]
 > Install the extension only from this repository's releases. Each ZIP comes with a
-> `.sha256` file, its fingerprint, to check that the ZIP is exactly the one published
-> here.
+> `.sha256` file, its fingerprint: download both into the same folder (here
+> `Downloads`) and check that the ZIP is exactly the one published here, with the
+> commands for your system below.
 
 <details>
-<summary>🔐 How to check the ZIP</summary>
+<summary>🍎 Check the ZIP on macOS</summary>
 
-Download the ZIP and its `.sha256` file into the same folder, here `Downloads`, then run
-these commands in a terminal.
-
-**macOS** (Terminal app)
+In the Terminal app:
 
 ```sh
 cd ~/Downloads
 shasum -a 256 -c librefolio-exporter-*.zip.sha256
 ```
 
-**Linux**
+The answer must end with `OK`. Anything else: don't install the ZIP, and download it
+again.
+
+</details>
+
+<details>
+<summary>🐧 Check the ZIP on Linux</summary>
+
+In a terminal:
 
 ```sh
 cd ~/Downloads
 sha256sum -c librefolio-exporter-*.zip.sha256
 ```
 
-**Windows** (PowerShell)
+The answer must end with `OK`. Anything else: don't install the ZIP, and download it
+again.
+
+</details>
+
+<details>
+<summary>🪟 Check the ZIP on Windows</summary>
+
+In PowerShell:
 
 ```powershell
 cd $HOME\Downloads
@@ -66,8 +80,8 @@ Get-ChildItem librefolio-exporter-*.zip | ForEach-Object {
 }
 ```
 
-The ZIP is the right one when the answer is `OK` (macOS, Linux) or `True` (Windows).
-Anything else: don't install it, and download it again.
+The answer must end with `True`. Anything else: don't install the ZIP, and download it
+again.
 
 </details>
 
@@ -78,8 +92,14 @@ To install a new version later, see [Update](#-update).
 1. Log in to Scalable Capital: the **LibreFolio** button appears in the bottom-right
    corner of every page.
 2. Click it, choose the accounts and the period, and click **Export CSV**.
-3. Choose the folder in Chrome's *Save as* window. If it is inside Downloads, the other
-   file follows on its own; elsewhere Chrome asks again for it: choose the same folder.
+3. **Choose the folder** for the files, for example `Downloads/LibreFolio`: Chrome does
+   not accept Downloads, Documents or Desktop themselves, only folders inside them.
+4. **Allow** Chrome to edit files there. Chrome asks on behalf of the Scalable page,
+   because the extension works inside it. The export then runs and writes both files.
+
+In Brave, which turns the folder picker off, Chrome's *Save as* window opens at the end
+instead: inside Downloads, the other file follows on its own. Details in
+[How it works](docs/HOW-IT-WORKS.md#-saving).
 
 <img src="docs/images/panel.png" alt="The panel after an export" width="400">
 

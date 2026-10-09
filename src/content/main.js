@@ -27,6 +27,8 @@
   const COUNTED_STEPS = new Set(['progressDeposit', 'progressBrokerDetails', 'progressDepositDetails']);
   const SAVE_POLL_MS = 500;
   const SAVE_WAIT_MS = 15 * 60 * 1000;
+  // Chrome's folder picker remembers the last folder chosen under this id, for this site.
+  const FOLDER_PICKER_ID = 'librefolio-exporter';
   const ERROR_KEYS = {
     noPerson: 'errorNoPerson',
     noPortfolio: 'errorNoPortfolio',
@@ -231,6 +233,88 @@
     return { state: 'failed', error: 'timeout' };
   }
 
+  // Chrome's folder picker (File System Access). Chrome opens it only within seconds of a
+  // click, asks for the permission on behalf of the page, and refuses the home, Desktop,
+  // Documents and Downloads folders themselves; some browsers (Brave) turn it off.
+  function folderPickerAvailable() {
+    return typeof root.showDirectoryPicker === 'function';
+  }
+
+  // { folder } when chosen with permission to write; { cancelled } when the user closes the
+  // picker, { cancelled, denied } without that permission; {} when the picker cannot open
+  // here, and Chrome's "Save as" window is used instead. The folder is never stored: kept
+  // in the page's storage, the page itself could reach it.
+  async function pickFolder() {
+    let folder;
+    try {
+      folder = await root.showDirectoryPicker({ id: FOLDER_PICKER_ID, mode: 'readwrite', startIn: 'downloads' });
+    } catch (error) {
+      const name = (error && error.name) || 'Error';
+      log('folder-picker', { error: name });
+      return name === 'AbortError' ? { cancelled: true } : {};
+    }
+    let permission;
+    try {
+      permission = await folder.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') permission = await folder.requestPermission({ mode: 'readwrite' });
+    } catch (error) {
+      permission = 'denied';
+    }
+    log('folder-picker', { permission });
+    return permission === 'granted' ? { folder } : { cancelled: true, denied: true };
+  }
+
+  // Like Chrome's downloads, "name (1).csv" when the name is taken.
+  async function freeName(folder, name) {
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const extension = dot > 0 ? name.slice(dot) : '';
+    for (let index = 0; index < 100; index++) {
+      const candidate = index === 0 ? name : `${stem} (${index})${extension}`;
+      try {
+        await folder.getFileHandle(candidate);
+      } catch (error) {
+        if (error && error.name === 'NotFoundError') return candidate;
+        if (error && error.name === 'TypeMismatchError') continue;
+        throw error;
+      }
+    }
+    throw new Error('no free file name');
+  }
+
+  async function writeToFolder(folder, file) {
+    const name = await freeName(folder, file.name);
+    const handle = await folder.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    try {
+      await writable.write(file.content);
+      await writable.close();
+    } catch (error) {
+      try {
+        await writable.abort();
+      } catch (ignored) {
+        // Already closed.
+      }
+      throw error;
+    }
+    return name;
+  }
+
+  // Writes the files in the folder chosen with Chrome's picker.
+  async function saveToFolder(folder, files) {
+    const saved = [];
+    for (const file of files) {
+      try {
+        saved.push({ account: file.account, folder: folder.name, name: await writeToFolder(folder, file) });
+      } catch (error) {
+        log('folder-write', { account: file.account, error: (error && error.name) || 'Error' });
+        return { ok: false, error: (error && error.message) || String(error), saved };
+      }
+    }
+    log('folder-write', { files: saved.length });
+    return { ok: true, saved };
+  }
+
   // Chrome's "Save as" window for the first file, the others next to it. From the page,
   // into Downloads, when a file is too large for the extension or it does not answer.
   // saved: { account, folder } for each file written; ok false with the reason otherwise.
@@ -350,6 +434,17 @@
     console.groupCollapsed(`[LibreFolio Exporter] ${t('exporting')} ${new Date().toLocaleTimeString()}`);
     try {
       const settings = await loadSettings();
+      // The folder comes first: Chrome opens its picker only within seconds of the click.
+      let folder = null;
+      if (settings.saveDialog !== false && folderPickerAvailable()) {
+        ui.setProgress(null, t('progressPickFolder'));
+        const picked = await pickFolder();
+        if (picked.cancelled) {
+          ui.setStatus(t(picked.denied ? 'folderDenied' : 'folderNotChosen'));
+          return;
+        }
+        folder = picked.folder || null;
+      }
       rememberIdsFromPage();
       const person = personInTab();
       const remembered = person ? await message({ type: 'lfx:recall-ids', personId: person.value }) : null;
@@ -408,14 +503,25 @@
       }
       const written = new Set();
       if (files.length > 0) {
-        if (settings.saveDialog !== false) ui.setProgress(null, files.length > 1 ? t('progressSaving', t('downloadsName')) : t('progressSavingOne'));
-        const result = await saveFiles(files, settings);
+        let result;
+        if (folder) {
+          ui.setProgress(null, t('progressWriting'));
+          result = await saveToFolder(folder, files);
+        } else {
+          if (settings.saveDialog !== false) ui.setProgress(null, files.length > 1 ? t('progressSaving', t('downloadsName')) : t('progressSavingOne'));
+          result = await saveFiles(files, settings);
+        }
         for (const entry of result.saved) written.add(entry.account);
+        const savedNames = new Map(result.saved.map((entry) => [entry.account, entry.name]));
         const folders = new Set(result.saved.map((entry) => entry.folder));
         ui.setResult(
           files
             .filter((file) => written.has(file.account))
-            .map((file) => ({ account: file.account, name: file.name, text: t(file.account === 'broker' ? 'resultBroker' : 'resultDeposit', file.count) })),
+            .map((file) => ({
+              account: file.account,
+              name: savedNames.get(file.account) || file.name,
+              text: t(file.account === 'broker' ? 'resultBroker' : 'resultDeposit', file.count),
+            })),
           folders.size === 1 && result.saved[0].folder ? t('resultFolder', result.saved[0].folder) : '',
         );
         if (result.cancelled) ui.setStatus(t('saveCancelled'));
