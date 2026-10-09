@@ -48,8 +48,9 @@ while you move between pages, for the current day.
   next to the first one; then it remembers the folder. When you save outside it, the
   extension checks at most once a week whether Chrome's setting has changed.
 - Outside the download folder, or when Chrome is set to *Ask where to save each file*,
-  Chrome opens its window for the second file too. A file saved through a window is
-  never moved.
+  Chrome opens its window for the second file too: choose the same folder. Chrome starts
+  that window in its download folder, as it does for every file named by an extension.
+  A file saved through a window is never moved.
 - A file larger than about 2 MB is saved by the page itself, into the download folder.
 - Under *Saving* you can change the start of the file names (`scalable` by default).
 - Files keep their names even when another extension renames downloads.

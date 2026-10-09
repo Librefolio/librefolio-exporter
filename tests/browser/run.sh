@@ -5,12 +5,15 @@
 # server and drives an export over the DevTools protocol. Needs node, python3, openssl.
 #
 #   BROWSER=/path/to/browser CDP_PORT=9333 HTTPS_PORT=9443 sh tests/browser/run.sh
+#
+# EXTENSION_DIR loads another copy of the extension, such as the folder of the release ZIP.
 set -eu
 
 BROWSER=${BROWSER:-"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"}
 CDP_PORT=${CDP_PORT:-9333}
 HTTPS_PORT=${HTTPS_PORT:-9443}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+EXTENSION=$(cd "${EXTENSION_DIR:-$ROOT}" && pwd)
 WORK=$(mktemp -d)
 SERVER_PID=""
 BROWSER_PID=""
@@ -34,7 +37,7 @@ python3 "$ROOT/tests/browser/fake_scalable.py" "$WORK/requests.jsonl" "$WORK/cer
 SERVER_PID=$!
 
 "$BROWSER" --headless=new --user-data-dir="$WORK/profile" --remote-debugging-port="$CDP_PORT" \
-  --load-extension="$ROOT" --disable-extensions-except="$ROOT" \
+  --load-extension="$EXTENSION" --disable-extensions-except="$EXTENSION" \
   --host-resolver-rules="MAP de.scalable.capital 127.0.0.1" --ignore-certificate-errors \
   --window-size=1280,1000 --no-first-run --no-default-browser-check --disable-sync about:blank >"$WORK/browser.log" 2>&1 &
 BROWSER_PID=$!

@@ -177,7 +177,7 @@ a { color: #3a63a8; }
 
   function create(options) {
     const t = options.t;
-    const state = { busy: false, riskAccepted: false, lastExports: {} };
+    const state = { busy: false, riskAccepted: false, unavailable: false, lastExports: {} };
 
     const host = el('div', { id: 'librefolio-exporter-root', 'data-testid': 'lfx-root' });
     const shadow = host.attachShadow({ mode: 'closed' });
@@ -357,7 +357,7 @@ a { color: #3a63a8; }
     shadow.appendChild(panel);
 
     function refreshExportButton() {
-      exportButton.disabled = state.busy || !state.riskAccepted;
+      exportButton.disabled = state.busy || state.unavailable || !state.riskAccepted;
     }
 
     function openPanel() {
@@ -402,6 +402,14 @@ a { color: #3a63a8; }
         riskFooterLink.hidden = !state.riskAccepted;
         refreshExportButton();
       },
+      // The extension was reloaded or updated while the page was open: the panel only says so.
+      setUnavailable(text) {
+        state.unavailable = true;
+        riskBox.hidden = true;
+        updateButton.disabled = true;
+        api.setStatus(text, 'error');
+        refreshExportButton();
+      },
       // info: { status: 'checking' | 'current' | 'available' | 'failed', latest, url }
       setUpdate(info) {
         let status = (info && info.status) || 'failed';
@@ -409,7 +417,7 @@ a { color: #3a63a8; }
         if (status === 'available' && !(validLink && info.latest)) status = 'failed';
         updateBar.setAttribute('data-state', status);
         updateBar.className = status === 'available' ? 'versionbar available' : 'versionbar';
-        updateButton.disabled = status === 'checking';
+        updateButton.disabled = status === 'checking' || state.unavailable;
         updateLink.hidden = status !== 'available';
         if (status === 'available') {
           updateLink.href = info.url;

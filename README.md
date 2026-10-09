@@ -16,13 +16,16 @@ Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 
 1. **Download** `librefolio-exporter-<version>.zip` from the
    [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest).
-2. **Unzip** it into a folder that will stay where it is, not one you clean up.
+2. **Unzip** it and put the `librefolio-exporter` folder you get where it can stay: any
+   folder works, we suggest `Downloads/chromePlugin`. Chrome loads the extension from
+   that folder, so don't move or delete it afterwards.
 3. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
    **Developer mode**, top right:
 
    ![Developer mode and the Load unpacked button](docs/images/install-developer-mode.png)
 
-4. Click **Load unpacked** and choose the folder. The extension appears in the list:
+4. Click **Load unpacked** and choose the `librefolio-exporter` folder. The extension
+   appears in the list:
 
    ![The extension in chrome://extensions](docs/images/install-extension-card.png)
 
@@ -30,15 +33,53 @@ Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 
 > [!TIP]
 > Install the extension only from this repository's releases. Each ZIP comes with a
-> `.sha256` file to check it.
+> `.sha256` file, its fingerprint, to check that the ZIP is exactly the one published
+> here.
+
+<details>
+<summary>🔐 How to check the ZIP</summary>
+
+Download the ZIP and its `.sha256` file into the same folder, here `Downloads`, then run
+these commands in a terminal.
+
+**macOS** (Terminal app)
+
+```sh
+cd ~/Downloads
+shasum -a 256 -c librefolio-exporter-*.zip.sha256
+```
+
+**Linux**
+
+```sh
+cd ~/Downloads
+sha256sum -c librefolio-exporter-*.zip.sha256
+```
+
+**Windows** (PowerShell)
+
+```powershell
+cd $HOME\Downloads
+Get-ChildItem librefolio-exporter-*.zip | ForEach-Object {
+  $expected = (Get-Content "$($_.FullName).sha256").Split(' ')[0]
+  "$($_.Name): $((Get-FileHash $_.FullName -Algorithm SHA256).Hash -eq $expected)"
+}
+```
+
+The ZIP is the right one when the answer is `OK` (macOS, Linux) or `True` (Windows).
+Anything else: don't install it, and download it again.
+
+</details>
+
+To install a new version later, see [Update](#-update).
 
 ## 🚀 Use
 
 1. Log in to Scalable Capital: the **LibreFolio** button appears in the bottom-right
    corner of every page.
 2. Click it, choose the accounts and the period, and click **Export CSV**.
-3. Choose the folder in Chrome's *Save as* window: the other file goes into the same
-   folder.
+3. Choose the folder in Chrome's *Save as* window. If it is inside Downloads, the other
+   file follows on its own; elsewhere Chrome asks again for it: choose the same folder.
 
 <img src="docs/images/panel.png" alt="The panel after an export" width="400">
 
@@ -51,8 +92,21 @@ You get one file per account, `scalable-broker_<date>_<time>.csv` and
 
 ## 🔄 Update
 
-The panel tells you when a new version exists. Download it, replace the content of the
-folder, and click the reload button (⟳) of the extension in `chrome://extensions`.
+The top of the panel tells you when a new version is out. To install it:
+
+1. **Download** the new ZIP from the
+   [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest)
+   and **unzip** it.
+2. **Replace** the old `librefolio-exporter` folder with the new one, in the same place
+   (for example `Downloads/chromePlugin`).
+3. Open `chrome://extensions` and click the **reload** button ⟳ on the LibreFolio
+   Exporter card (bottom right in the picture above).
+4. **Reload** the Scalable pages you have open (Cmd+R on macOS, F5 elsewhere): until
+   then they keep the old version, and its panel asks you to reload.
+
+Your settings and the dates of the last exports stay, as long as the folder stays the
+same: Chrome knows the extension by its folder, and a copy loaded from another folder
+would be a second extension, starting from scratch.
 
 ## 🛡️ Privacy and risks
 

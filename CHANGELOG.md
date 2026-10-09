@@ -24,8 +24,9 @@ First preview, installed by hand.
 - CSV files with the columns of Scalable's official export followed by `lf_*` columns
   with the original values ([format version 1](docs/FORMAT.md)).
 - One *Save as* window per export: the other file goes into the same folder, without a
-  window when Chrome allows it (inside its download folder). The start of the file names
-  can be changed. Files keep their names when another extension renames downloads.
+  window when Chrome allows it (inside its download folder); elsewhere Chrome asks again,
+  and the panel says to choose the same folder. The start of the file names can be
+  changed. Files keep their names when another extension renames downloads.
 - Accounts chosen with two tiles; a progress bar with the current step while exporting,
   and the details in one collapsed group of the browser console.
 - A green list of the saved files at the end, with what each contains and the folder.
@@ -36,5 +37,9 @@ First preview, installed by hand.
 - Light-use safeguards: requests one at a time with pauses, back-off on rate limits,
   stop on errors, cancel button.
 - Risk notice, accepted before the first export.
+- Pages left open while the extension is updated or reloaded ask to be reloaded, instead
+  of running the old version cut off from the extension.
+- The release ZIP holds a `librefolio-exporter` folder, the same at every version, so
+  that an update unzipped in the same place keeps the extension and its settings.
 - Version and update check at the top of the panel: automatic when the panel opens
   (at most once a day) and on request with **Check for updates**.

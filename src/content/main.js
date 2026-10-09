@@ -109,6 +109,16 @@
     }
   }
 
+  // Once the extension is reloaded or updated, the pages already open keep this script, cut
+  // off from the extension: Chrome then takes its id away. Only reloading the page helps.
+  function extensionAlive() {
+    try {
+      return Boolean(chrome.runtime && chrome.runtime.id);
+    } catch (error) {
+      return false;
+    }
+  }
+
   function webStorage(name) {
     try {
       return root[name];
@@ -258,6 +268,7 @@
         continue;
       }
       // Chrome opens a window for this file too: outside its download folder, or by its setting.
+      ui.setProgress(null, t('progressSavingNext'));
       const choice = await waitForChoice(result.window);
       log('save-next', { account, how: 'window', state: choice.state });
       if (choice.state === 'chosen') saved.push({ account, folder: choice.directory });
@@ -277,6 +288,10 @@
   }
 
   async function onOpen() {
+    if (!extensionAlive()) {
+      ui.setUnavailable(t('reloadPage'));
+      return;
+    }
     const settings = await loadSettings();
     ui.setRiskAccepted(settings.riskAccepted === true);
     ui.setLastExport(settings.lastExportDates);
@@ -312,6 +327,10 @@
   }
 
   async function onExport(options) {
+    if (!extensionAlive()) {
+      ui.setUnavailable(t('reloadPage'));
+      return;
+    }
     if (!options.broker && !options.deposit) {
       ui.setStatus(t('selectAccount'), 'error');
       return;
@@ -389,7 +408,7 @@
       }
       const written = new Set();
       if (files.length > 0) {
-        if (settings.saveDialog !== false) ui.setProgress(null, t(files.length > 1 ? 'progressSaving' : 'progressSavingOne'));
+        if (settings.saveDialog !== false) ui.setProgress(null, files.length > 1 ? t('progressSaving', t('downloadsName')) : t('progressSavingOne'));
         const result = await saveFiles(files, settings);
         for (const entry of result.saved) written.add(entry.account);
         const folders = new Set(result.saved.map((entry) => entry.folder));

@@ -432,6 +432,7 @@ function createPage(options) {
       },
     },
   };
+  page.chrome = chrome;
   let blobCount = 0;
   const globals = {
     document: page.document,
@@ -835,6 +836,7 @@ test('the second file goes next to the first without a window, whenever Chrome a
   const background = page.background;
   await acceptRiskAndExport(page);
   assert.equal(background.removed.length, 1, 'the first export learns Chrome’s download folder');
+  assert.equal(page.find('lfx-progress-label').textContent, 'Scegli dove salvare: se è dentro Download, l’altro file ci andrà da solo');
 
   await acceptRiskAndExport(page);
   assert.equal(background.removed.length, 1, 'then the second file goes straight next to the first');
@@ -852,6 +854,11 @@ test('the second file goes next to the first without a window, whenever Chrome a
   assert.equal(background.removed.length, 1, 'and nothing is written in the download folder first');
   assert.deepEqual(resultLines(page).length, 2);
   assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents/Finanza', 'both chosen in the same folder');
+  assert.equal(
+    page.find('lfx-progress-label').textContent,
+    'Chrome chiede dove salvare anche l’altro file: scegli la stessa cartella',
+    'its window starts in the download folder: the label says where to go',
+  );
 
   background.dialogDirectory = '/Users/test/Downloads/.private';
   await acceptRiskAndExport(page);
@@ -968,6 +975,41 @@ test('a save failure is reported, and without the extension the page saves the f
   assert.match(page.anchorDownloads[0].name, /^scalable-broker_/);
   assert.match(await page.blobs.get(page.anchorDownloads[1].url).text(), /^date;time;status;/);
   assert.deepEqual(logged(page, 'download-fallback'), [{ reason: 'no answer from the extension' }]);
+});
+
+// Chrome cuts the script of an open page off from a reloaded extension: no id, every call fails.
+function cutOff(page) {
+  const gone = async () => {
+    throw new Error('Extension context invalidated.');
+  };
+  page.chrome.runtime.id = undefined;
+  page.chrome.runtime.sendMessage = gone;
+  page.chrome.storage.local.get = gone;
+  page.chrome.storage.local.set = gone;
+}
+
+test('a page left open while the extension is reloaded asks to be reloaded', async () => {
+  const reloadText = 'L’estensione è stata aggiornata o ricaricata: ricarica questa pagina per usarla.';
+  const page = loadContentScripts(createPage());
+  cutOff(page);
+  page.find('lfx-open').click();
+  await settle(() => page.find('lfx-status').textContent !== '');
+  assert.equal(page.find('lfx-status').textContent, reloadText);
+  assert.equal(page.find('lfx-status').className, 'status error');
+  assert.equal(page.find('lfx-risk').hidden, true, 'not the notice again, as if never accepted');
+  assert.equal(page.find('lfx-export').disabled, true);
+  assert.equal(page.find('lfx-update-check').disabled, true);
+
+  const open = loadContentScripts(createPage());
+  await openPanel(open);
+  open.find('lfx-risk-accept').click();
+  await settle(() => open.stored.riskAccepted === true);
+  cutOff(open);
+  open.find('lfx-export').click();
+  await settle(() => open.find('lfx-status').textContent !== '');
+  assert.equal(open.find('lfx-status').textContent, reloadText, 'a panel already open when the extension was reloaded');
+  assert.equal(open.find('lfx-export').disabled, true);
+  assert.deepEqual(open.calls, [], 'nothing is read from Scalable');
 });
 
 test('the button is shown on every web-app page, and only there', () => {
