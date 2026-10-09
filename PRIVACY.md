@@ -43,8 +43,9 @@ Your transactions are never written to the extension's storage. The CSV files co
 the transactions as Scalable describes them, with their ids and references. The ids of
 the person, of the portfolio and of the overnight accounts are never written: where a
 value contains one, as the overnight account's transaction ids do, it is replaced by a
-short tag that does not give the id back. IBANs in descriptions are shortened, like
-`IT60…3456`. Details in [docs/FORMAT.md](docs/FORMAT.md#privacy).
+short tag that does not give the id back. Descriptions are written as received, names
+and IBANs of transfers included, because LibreFolio shows them with the imported
+transactions. Details in [docs/FORMAT.md](docs/FORMAT.md#privacy).
 
 To give its own files their names, the extension takes part in naming downloads
 (Chrome's `downloads.onDeterminingFilename`): it answers only for the files it saves,

@@ -1,7 +1,9 @@
 /*
- * GraphQL operations of the Scalable Capital web app, limited to fields that
- * public projects already read from the web endpoints (see THIRD_PARTY_NOTICES.md):
- * every extra field is one more place where a schema change breaks the export.
+ * GraphQL operations of the Scalable Capital web app. GraphQL answers only the fields a
+ * query asks for, so the broker queries below decide what the broker's lf_* columns
+ * carry (docs/FORMAT.md): the transaction list, and the details that the list does not
+ * already give. Every field is also one more place where a schema change breaks the
+ * export. The overnight account's queries are the web app's own, used as they are.
  */
 (function (root) {
   'use strict';
@@ -80,24 +82,11 @@ fragment BrokerEltifTransactionSummaryFragment on BrokerEltifTransactionSummary 
     brokerPortfolio(id: $portfolioId) {
       id
       transactionDetails(id: $transactionId) {
-        id
-        currency
-        type
-        lastEventDateTime
         transactionReference
-        security {
-          id
-          name
-          isin
-          __typename
-        }
         ... on BrokerSecurityTransaction {
-          side
-          status
           numberOfShares {
             filled
             total
-            __typename
           }
           averagePrice
           totalAmount
@@ -107,19 +96,14 @@ fragment BrokerEltifTransactionSummaryFragment on BrokerEltifTransactionSummary 
             transactionFee
             venueFee
             cryptoSpreadFee
-            __typename
           }
           tradingVenue
           fee
           transactionalFee
           taxes
-          __typename
         }
-        __typename
       }
-      __typename
     }
-    __typename
   }
 }`;
 

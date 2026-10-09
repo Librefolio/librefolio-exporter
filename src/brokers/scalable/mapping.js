@@ -3,7 +3,7 @@
  *
  * The first 14 columns follow the official Scalable CSV export (PRIME), so tools
  * that read it can read these files too; their labels are a best-effort mapping.
- * The lf_* columns carry the API fields verbatim, all but an exclusion list, and are the
+ * The lf_* columns carry, verbatim, every field that the queries return, and are the
  * source of truth for LibreFolio. See docs/FORMAT.md.
  */
 (function (root) {
@@ -34,11 +34,12 @@
   // Columns closing every row, after the fields.
   const CLOSING_COLUMNS = ['lf_details', 'lf_exporter', 'lf_format'].map((name) => ({ name }));
 
-  // Every field of a transaction, from the list and from its details, is written as an lf_*
-  // column, except the fields excluded below: a field Scalable adds to a response arrives
-  // in the CSV by itself. The fields known so far keep a short name and a fixed place,
-  // listed here; any other field is named after its path (numberOfShares.total →
-  // lf_number_of_shares_total) and placed before the closing columns.
+  // Every field that the queries return, from the list and from the details, is written as
+  // an lf_* column: GraphQL answers only the fields a query asks for, so the queries decide
+  // the content (queries.js for the broker; the web app's own for the overnight account).
+  // The fields known so far keep a short name and a fixed place, listed here; any other
+  // field is named after its path (numberOfShares.total → lf_number_of_shares_total) and
+  // placed before the closing columns.
   const FIELD_COLUMNS = [
     ['id', 'lf_id'],
     ['type', 'lf_kind'],
@@ -48,7 +49,12 @@
     ['side', 'lf_side'],
     ['status', 'lf_status'],
     ['isCancellation', 'lf_is_cancellation'],
+    ['isPending', 'lf_is_pending'],
     ['lastEventDateTime', 'lf_timestamp_utc'],
+    ['description', 'lf_description'],
+    ['isin', 'lf_isin'],
+    ['relatedIsin', 'lf_related_isin'],
+    ['currency', 'lf_currency'],
     ['amount', 'lf_amount'],
     ['quantity', 'lf_quantity'],
     ['eltifQuantity', 'lf_quantity'],
@@ -68,26 +74,19 @@
     ['taxes', 'lf_taxes'],
     ['tradingVenue', 'lf_trading_venue'],
     ['transactionReference', 'lf_transaction_reference'],
+    ['transactionHistory', 'lf_transaction_history'],
   ];
   const FIELD_COLUMN = new Map(FIELD_COLUMNS);
 
-  // Fields left out, by path ('a.b' inside a nested object), with the reason; __typename at
-  // any depth. They repeat a Prime column, or belong to the web app's internals.
+  // The only field left out: GraphQL's own name of each type, at any depth, which names
+  // the shape of the answer rather than the transaction. Everything else that a query
+  // returns is written.
   const EXCLUDED_FIELDS = {
     __typename: 'GraphQL type name, internal to the web app',
-    currency: 'in the Prime column currency',
-    description: 'in the Prime column description',
-    isin: 'in the Prime column isin',
-    relatedIsin: 'in the Prime column isin (distributions)',
-    'security.isin': 'in the Prime column isin',
-    'security.name': 'in the Prime column description',
-    'security.id': 'internal id of the security; the ISIN identifies it',
-    isPending: 'repeats the status',
-    transactionHistory: "the web app's log of status changes; date and status have their columns",
   };
 
   function isExcluded(path) {
-    return Object.prototype.hasOwnProperty.call(EXCLUDED_FIELDS, path) || path.endsWith('.__typename');
+    return path === '__typename' || path.endsWith('.__typename');
   }
 
   function columnOf(path) {
@@ -114,7 +113,8 @@
     if (typeof value === 'number' || typeof value === 'bigint') return format.toPlainString(value);
     if (typeof value === 'boolean') return value ? 'true' : 'false';
     if (typeof value === 'string') return value;
-    return JSON.stringify(value);
+    // A list, such as the overnight account's transactionHistory, written whole.
+    return JSON.stringify(value, (key, item) => (key === '__typename' ? undefined : item));
   }
 
   // The fields of the list item and of its details: a field in both keeps the list value,
@@ -152,13 +152,6 @@
       }
     }
     return masked;
-  }
-
-  // IBANs in a description, shortened as on a bank statement: country, check digits and
-  // the last four characters.
-  const IBAN = /\b[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]){11,30}\b/g;
-  function maskIban(text) {
-    return typeof text === 'string' ? text.replace(IBAN, (iban) => `${iban.slice(0, 4)}…${iban.replace(/ /g, '').slice(-4)}`) : text;
   }
 
   // Writes the fields into the row: fixed columns in place, new fields as new columns.
@@ -289,14 +282,16 @@
   function mapBrokerTransaction(summary, detailsResult, context) {
     const details = (detailsResult && detailsResult.details) || null;
     const amounts = (details && details.tradeTransactionAmounts) || {};
-    const security = (details && details.security) || {};
     const when = format.berlinDateTime(summary.lastEventDateTime);
     const rawQuantity = summary.quantity !== undefined && summary.quantity !== null ? summary.quantity : summary.eltifQuantity;
     const filled = details && details.numberOfShares ? details.numberOfShares.filled : undefined;
     // Like the official export: the shares executed, so none for an order that never was.
     const shares = NOT_EXECUTED.has(summary.status) ? '0' : format.toPlainString(filled !== undefined && filled !== null ? filled : rawQuantity);
     const price = format.toPlainString(details && details.averagePrice);
-    const fee = details ? format.sumDecimals([amounts.transactionFee, amounts.venueFee, amounts.cryptoSpreadFee]) : '';
+    // Read details without a fee or a tax mean none, like the official export's 0; without
+    // the details, fee and tax stay empty: unknown.
+    const fee = details ? format.sumDecimals([amounts.transactionFee, amounts.venueFee, amounts.cryptoSpreadFee]) || '0' : '';
+    const tax = details ? format.toPlainString(amounts.taxAmount) || '0' : '';
     const fields = mergedFields(summary, details);
 
     const row = emptyRow(context);
@@ -305,16 +300,16 @@
       time: when.time,
       status: primeStatus(summary.status),
       reference: maskIds((details && details.transactionReference) || summary.id || '', context),
-      description: maskIban(maskIds(summary.description || security.name || '', context)),
+      description: maskIds(summary.description || '', context),
       assetType: classify(summary) === 'cash' ? 'Cash' : 'Security',
       type: primeType(summary),
-      isin: summary.isin || summary.relatedIsin || security.isin || '',
+      isin: summary.isin || summary.relatedIsin || '',
       shares: format.toDecimalComma(shares),
       price: format.toDecimalComma(price),
       amount: format.toDecimalComma(format.toPlainString(summary.amount)),
       fee: format.toDecimalComma(fee),
-      tax: format.toDecimalComma(format.toPlainString(amounts.taxAmount)),
-      currency: summary.currency || (details && details.currency) || '',
+      tax: format.toDecimalComma(tax),
+      currency: summary.currency || '',
       lf_account: 'broker',
       lf_account_index: '1',
       lf_details: (detailsResult && detailsResult.status) || 'n/a',
@@ -339,11 +334,11 @@
       time: when.time,
       status: primeStatus(transaction.status),
       reference: maskIds((details && details.transactionReference) || transaction.id || '', context),
-      description: maskIban(maskIds(transaction.description || '', context)),
+      description: maskIds(transaction.description || '', context),
       assetType: 'Cash',
       type: CASH_TO_PRIME[subtype] || subtype || transaction.type || '',
       amount: format.toDecimalComma(signedAmount),
-      tax: format.toDecimalComma(format.toPlainString(taxDetails.taxAmount)),
+      tax: format.toDecimalComma(details ? format.toPlainString(taxDetails.taxAmount) || '0' : ''),
       currency: transaction.currency || '',
       lf_account: 'deposit',
       lf_account_index: String(accountIndex),
@@ -364,7 +359,6 @@
     columnsFor,
     extraColumns,
     maskIds,
-    maskIban,
     STATUS_TO_PRIME,
     CASH_TO_PRIME,
     classify,

@@ -37,15 +37,15 @@ must read those instead.
 | `date`, `time` | `lastEventDateTime`, converted to Europe/Berlin |
 | `status` | `SETTLED`, `FILLED`, `CONFIRMED` → `Executed`; `CANCELLED` → `Cancelled`; `EXPIRED` → `Expired`; `REJECTED` → `Rejected`; `CREATED`, `REQUESTED`, `PENDING`, `PARTIAL_FILLED`, `CANCEL_REQUESTED` → `Pending`; any other value as received |
 | `reference` | `transactionReference` from the trade or interest details when read, otherwise the transaction id (account ids masked) |
-| `description` | Transaction description (the security name for trades), IBANs shortened |
+| `description` | Transaction description as received (the security name for trades) |
 | `assetType` | `Cash` for cash transactions and the overnight account, `Security` otherwise |
 | `type` | See below |
 | `isin` | `isin`, or `relatedIsin` for distributions |
 | `shares` | Shares executed: trade details `numberOfShares.filled`, otherwise `quantity` (`eltifQuantity` for ELTIF); `0` for a cancelled, rejected or expired order, like the official export |
 | `price` | Trade details `averagePrice` |
 | `amount` | `amount`, sign as received; on the overnight account, negative for outflows (see below) |
-| `fee` | Sum of the trade fees (see above) |
-| `tax` | Trade details `tradeTransactionAmounts.taxAmount`; for interest, `taxDetails.taxAmount` |
+| `fee` | Sum of the trade fees (see above); `0` when the details are read and give none, empty when they are not read |
+| `tax` | Trade details `tradeTransactionAmounts.taxAmount`; for interest, `taxDetails.taxAmount`; `0` and empty as for `fee` |
 | `currency` | `currency` |
 
 `type` mapping:
@@ -67,72 +67,65 @@ must read those instead.
 
 ## Columns `lf_*`: the web app's fields
 
-Every field of a transaction, from the list and from its details when they are read,
-is written as an `lf_*` column, **except the excluded fields** below. A field that
-Scalable adds to a response therefore reaches the CSV by itself; the browser console
-reports its name (`new-fields`, never the values), so that it can be named and
-documented.
+The `lf_*` columns are the fields that the queries return, one column per field, values
+as received. GraphQL answers only the fields a query asks for, so the queries decide what
+a file carries:
 
-- **Known fields** have a short name and a fixed place (table below).
-- **Any other field** is named after its path: `numberOfShares.total` would become
+- **Broker**: the queries are this extension's (`src/brokers/scalable/queries.js`): the
+  transaction list, and the details of executed trades for what the list does not already
+  give. A field is added or removed there, not with a filter.
+- **Overnight account**: the queries are the web app's own, used as they are, so every
+  field they return is written. When Scalable adds one, it arrives as a new column and the
+  browser console reports its name (`new-fields`, never the values).
+- Only GraphQL's `__typename` is left out, at any depth: it names the shape of the answer,
+  not the transaction.
+
+How fields become columns:
+
+- Known fields have a short name and a fixed place (table below).
+- Any other field is named after its path: `numberOfShares.total` would become
   `lf_number_of_shares_total`. Nested objects are walked; a list is written whole, as
   JSON. New columns come after the known ones, sorted by name, before `lf_details`,
   `lf_exporter` and `lf_format`, which always close the row.
-- A field present both in the list and in the details is written once, with the list
-  value; when the details give a different value, it goes to a column of its own,
-  `lf_details_<name>`, so nothing is lost.
-- GraphQL returns only the fields a query asks for. The overnight account's list is read
-  with the web app's own query, so new fields there arrive by themselves; the broker's
-  queries are this extension's, and a new broker field arrives only once a new version
-  asks for it.
+- A field that the list and the details both give is written once, with the list value;
+  when the details give a different value, it goes to a column of its own,
+  `lf_details_<name>`.
 
-| Column | Field |
-|---|---|
-| `lf_account` | `broker` or `deposit` (the overnight account): not a field |
-| `lf_account_index` | `1` for the broker; 1, 2… for each overnight account: not a field |
-| `lf_id` | `id`, the transaction id in the web app (stable: use it to detect duplicates); account ids inside it are masked (see Privacy) |
-| `lf_kind` | `type`, e.g. `SECURITY_TRANSACTION`, `CASH_TRANSACTION` |
-| `lf_subtype` | `securityTransactionType`, `cashTransactionType` or `nonTradeSecurityTransactionType` |
-| `lf_side` | `side`: `BUY` or `SELL` for trades |
-| `lf_status` | `status` as received, e.g. `SETTLED` |
-| `lf_is_cancellation` | `isCancellation`: `true`, `false` or empty |
-| `lf_timestamp_utc` | `lastEventDateTime` as received |
-| `lf_amount` | `amount` |
-| `lf_quantity` | `quantity`, or `eltifQuantity` for ELTIF: the quantity ordered |
-| `lf_price` | Trade details `averagePrice` |
-| `lf_filled_shares` | Trade details `numberOfShares.filled` |
-| `lf_total_shares` | Trade details `numberOfShares.total` |
-| `lf_total_amount` | Trade details `totalAmount` |
-| `lf_market_valuation` | Trade details `tradeTransactionAmounts.marketValuation` |
-| `lf_transaction_fee`, `lf_venue_fee`, `lf_crypto_spread_fee` | Trade details `tradeTransactionAmounts.*` |
-| `lf_tax_amount` | Trade details `tradeTransactionAmounts.taxAmount`; for interest, `taxDetails.taxAmount` (the tax withheld) |
-| `lf_gross_amount` | Interest details `taxDetails.grossAmount`, the interest before tax |
-| `lf_fee`, `lf_transactional_fee`, `lf_taxes` | Trade details `fee`, `transactionalFee`, `taxes` |
-| `lf_trading_venue` | Trade details `tradingVenue` |
-| `lf_transaction_reference` | `transactionReference` from the trade or interest details |
-| `lf_details` | `yes` (details read), `no` (not requested), `error` (could not be read), `n/a` (neither an executed trade nor an interest payment) |
-| `lf_exporter` | Producer and version, e.g. `librefolio-exporter/0.1.0` |
-| `lf_format` | Format version of this document |
+| Column | Field | What it is for |
+|---|---|---|
+| `lf_account` | Not a field | `broker` or `deposit` (the overnight account) |
+| `lf_account_index` | Not a field | `1` for the broker; 1, 2… for each overnight account |
+| `lf_id` | `id` | The web app's transaction id: stable, the key to recognise a transaction already imported. Account ids inside it are masked (see Privacy) |
+| `lf_kind` | `type` | `SECURITY_TRANSACTION`, `CASH_TRANSACTION`… |
+| `lf_subtype` | `securityTransactionType`, `cashTransactionType` or `nonTradeSecurityTransactionType` | `SAVINGS_PLAN`, `SINGLE`, `DEPOSIT`, `INTEREST`…: decides the LibreFolio type |
+| `lf_side` | `side` | `BUY` or `SELL` |
+| `lf_status` | `status` | `SETTLED`…: which transactions count |
+| `lf_is_cancellation` | `isCancellation` | A reversal |
+| `lf_is_pending` | `isPending` (overnight details) | Not settled yet |
+| `lf_timestamp_utc` | `lastEventDateTime` | The exact time, in UTC |
+| `lf_description` | `description` | As received: the security name of a trade, the text of a transfer, names and IBANs included |
+| `lf_isin` | `isin` | The security |
+| `lf_related_isin` | `relatedIsin` | The security of a distribution |
+| `lf_currency` | `currency` | |
+| `lf_amount` | `amount` | The amount, as the web app gives it |
+| `lf_quantity` | `quantity`, or `eltifQuantity` for ELTIF | The quantity |
+| `lf_price` | Trade details `averagePrice` | Average execution price |
+| `lf_filled_shares` | Trade details `numberOfShares.filled` | Shares executed |
+| `lf_total_shares` | Trade details `numberOfShares.total` | Shares ordered: more than the executed ones when an order is filled only in part |
+| `lf_total_amount` | Trade details `totalAmount` | Total of the trade, fees included |
+| `lf_market_valuation` | Trade details `tradeTransactionAmounts.marketValuation` | Value of the shares, before fees |
+| `lf_transaction_fee`, `lf_venue_fee`, `lf_crypto_spread_fee` | Trade details `tradeTransactionAmounts.*` | Each fee; empty when there is none |
+| `lf_tax_amount` | Trade details `tradeTransactionAmounts.taxAmount`; for interest, `taxDetails.taxAmount` | Tax; on interest, the tax withheld |
+| `lf_gross_amount` | Interest details `taxDetails.grossAmount` | Interest before tax |
+| `lf_fee`, `lf_transactional_fee`, `lf_taxes` | Trade details `fee`, `transactionalFee`, `taxes` | Totals of the details; empty on every trade seen so far ❓ |
+| `lf_trading_venue` | Trade details `tradingVenue` | Where the trade was executed, e.g. `SEIX` |
+| `lf_transaction_reference` | `transactionReference` from the trade or interest details | Scalable's reference, as on its documents (`SCAL…`) |
+| `lf_transaction_history` | Overnight details `transactionHistory` | Status changes with their times, as JSON |
+| `lf_details` | Not a field | `yes` (details read), `no` (not requested), `error` (could not be read), `n/a` (neither an executed trade nor an interest payment) |
+| `lf_exporter` | Not a field | Producer and version, e.g. `librefolio-exporter/0.1.0` |
+| `lf_format` | Not a field | Format version of this document |
 
 When `lf_details` is `no` or `error`, empty fee and tax fields mean *unknown*, not zero.
-
-### Excluded fields
-
-| Field | Why it is left out |
-|---|---|
-| `__typename` (at any depth) | GraphQL type name, internal to the web app |
-| `currency` | In the Prime column `currency` |
-| `description` | In the Prime column `description` |
-| `isin` | In the Prime column `isin` |
-| `relatedIsin` | In the Prime column `isin` (distributions) |
-| `security.isin` | In the Prime column `isin` |
-| `security.name` | In the Prime column `description` |
-| `security.id` | Internal id of the security; the ISIN identifies it |
-| `isPending` | Repeats the status |
-| `transactionHistory` | The web app's log of status changes; the date and the status have their columns |
-
-The list is `EXCLUDED_FIELDS` in `src/brokers/scalable/mapping.js`; a test keeps it and
-this table in step.
 
 ## Privacy
 
@@ -144,12 +137,12 @@ What a file must never carry, if it ends up somewhere it should not:
   becomes `person-`, `portfolio-` or `account-` followed by an eight-character tag. The
   same id always gives the same tag, so transaction ids stay unique and stable, and the
   tag does not give the id back.
-- **IBANs** in descriptions are shortened as on a bank statement: `IT60…3456`.
 - Nothing in the file opens the account: no credentials, cookies or tokens are ever read.
 
 What stays, because it is the purpose of the file: dates, amounts, quantities, ISINs and
 security names, the web app's transaction ids (masked as above) and references, and the
-descriptions, which for transfers from other banks may contain a name.
+descriptions as received, names and IBANs of transfers included: LibreFolio shows them
+with the imported transactions.
 
 ## Signs and amounts seen on real data
 
@@ -188,7 +181,7 @@ that read them (2026-10).
 | Accounts | Broker only | Broker and overnight account |
 | `reference` | 15 letters and digits, the `transactionReference` | The same when the details are read (executed trades, interest); otherwise the web app's id |
 | `shares` | Shares executed: `0` for a cancelled order | The same |
-| `fee`, `tax` of trades | Always filled, `0` when none | Filled when the details are read; empty means unknown |
+| `fee`, `tax` of trades | Always filled, `0` when none | The same when the details are read; empty when they are not: unknown |
 | `fee` of cash rows | `0` in the samples ❓ | Empty |
 | `price` of security transfers | Filled | Empty: their details are not read |
 | File name | `YYYY_MM_DD_HH_MM_SS_ScalableCapital-Broker-Transactions.csv` | `<prefix>-broker_<timestamp>.csv`, `<prefix>-deposit_<timestamp>.csv` |
