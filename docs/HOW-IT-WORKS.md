@@ -55,9 +55,10 @@ while you move between pages, for the current day.
   rare, since the ZIP is compressed.
 - Files keep their names even when another extension renames downloads.
 
-At the end, a green list shows the file, the CSV files it holds and its folder; after a
-few seconds it folds to one line, and **Show folder** stays. If you close the *Save as*
-window, nothing is saved and the accounts do not count as exported.
+At the end, each account's row says how many transactions were read; below them, in
+green, come the saved file and its folder, with **Show folder**. The rows stay unless the
+export stops before the accounts are read, as when it is cancelled. If you close the
+*Save as* window, nothing is saved and the accounts do not count as exported.
 
 ## 🔄 Update check
 

@@ -258,7 +258,7 @@ function createBackground(options) {
   const chrome = {
     runtime: {
       id: EXTENSION_ID,
-      getManifest: () => ({ version: '0.1.0' }),
+      getManifest: () => ({ version: '1.0.0' }),
       onMessage: { addListener: (listener) => background.listeners.push(listener) },
     },
     storage: {
@@ -404,7 +404,7 @@ function createPage(options) {
   const chrome = {
     runtime: {
       id: EXTENSION_ID,
-      getManifest: () => ({ version: '0.1.0' }),
+      getManifest: () => ({ version: '1.0.0' }),
       sendMessage: async (message) => {
         page.messages.push(message);
         if (page.override) {
@@ -512,8 +512,8 @@ function textOf(node) {
   return node.children.length > 0 ? node.children.map(textOf).join('') : node.textContent;
 }
 
-function resultLines(page) {
-  return page.find('lfx-result').children.map(textOf);
+function resultFile(page) {
+  return page.find('lfx-result-box').hidden ? null : page.find('lfx-result-file').textContent;
 }
 
 // Values built inside another context have that context's prototypes.
@@ -621,15 +621,15 @@ test('the content scripts export both accounts end to end', async () => {
   );
   assert.equal(find('lfx-status').textContent, '');
   assert.equal(find('lfx-progress-label').textContent, 'Scegli dove salvare lo ZIP con i due file');
-  assert.equal(find('lfx-result-archive').textContent, `📦 ${saved.filename}, con:`);
-  assert.deepEqual(resultLines(page), [`✅ ${brokerFile.name} — 2 transazioni del conto broker`, `✅ ${depositFile.name} — 2 movimenti del conto deposito`]);
+  assert.equal(find('lfx-progress-label').hidden, true, 'the step label goes when the export is over');
+  assert.equal(resultFile(page), `📦 ${saved.filename}`, 'only the saved file, its folder and the button');
   assert.equal(find('lfx-result-folder').textContent, '📁 Cartella: /Users/test/Documents/Finanza');
   assert.equal(find('lfx-result-show').hidden, false);
   assert.equal(find('lfx-result-show').textContent, 'Mostra cartella');
   find('lfx-result-show').click();
   await settle(() => page.background.shown.length === 1);
   assert.deepEqual(page.background.shown, [saved.id], 'the ZIP is shown in its folder');
-  assert.equal(find('lfx-progress').hidden, true, 'the progress bar is shown only while exporting');
+  assert.equal(find('lfx-progress').hidden, false, 'the account rows stay with their outcome');
   assert.equal(find('lfx-warnings').hidden, true, warningTexts(page).join(' | '));
 
   assert.deepEqual(accountCalls(page, 'broker'), BROKER_CALLS);
@@ -646,9 +646,7 @@ test('the content scripts export both accounts end to end', async () => {
   assert.equal(find('lfx-progress-broker-step').textContent, '✓ 2 transazioni');
   assert.equal(find('lfx-progress-deposit-step').textContent, '✓ 2 movimenti');
   assert.equal(find('lfx-progress-deposit').className, 'progress-row deposit done');
-  await settle(() => find('lfx-result-details').open === false);
-  assert.equal(find('lfx-result-summary').textContent, `✅ ${saved.filename} salvato`, 'the list folds to one line');
-  assert.equal(find('lfx-result-show').hidden, false, 'the folder button stays');
+  assert.equal(find('lfx-progress-broker').className, 'progress-row broker done');
 
   assert.equal(page.anchorDownloads.length, 0, 'saved by the extension, not by the page');
 
@@ -657,7 +655,7 @@ test('the content scripts export both accounts end to end', async () => {
   assert.ok(lines[0].startsWith('date;time;status;reference;description;assetType;type;isin;shares;price;amount;fee;tax;currency;lf_account;'));
   assert.ok(lines[1].startsWith('2026-09-01;10:00:00;Executed;"R1";"Some ETF";Security;Savings plan;IE00TEST0001;2,5;100;-250;0;0;EUR;broker;1;t1;'));
   assert.ok(lines[2].includes(';"Deposit; ""SEPA""";Cash;Deposit;'));
-  assert.ok(lines[1].endsWith(';yes;librefolio-exporter/0.1.0;1'));
+  assert.ok(lines[1].endsWith(';yes;librefolio-exporter/1.0.0;1'));
   const deposit = depositFile.text.trimEnd().split('\n');
   assert.equal(deposit.length, 3);
   assert.ok(deposit[1].startsWith('2026-10-01;01:00:00;Executed;"RI-1";"Interest";Cash;Interest;;;;1,23;;0,44;EUR;deposit;1;d1;'), deposit[1]);
@@ -700,7 +698,7 @@ test('on the Transactions page the recipe is read from the page, and remembered 
 
   await openPanel(transactionsPage);
   await acceptRiskAndExport(transactionsPage);
-  assert.equal(transactionsPage.find('lfx-result').hidden, false, transactionsPage.find('lfx-status').textContent);
+  assert.equal(transactionsPage.find('lfx-result-box').hidden, false, transactionsPage.find('lfx-status').textContent);
   assert.deepEqual(accountCalls(transactionsPage, 'broker'), BROKER_CALLS);
   assert.deepEqual(accountCalls(transactionsPage, 'deposit'), DEPOSIT_CALLS, 'no page download');
   assert.deepEqual(logged(transactionsPage, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'remembered', overnight: 'page', overnightAccounts: 1, overnightRecipes: ['page'] }]);
@@ -710,7 +708,7 @@ test('on the Transactions page the recipe is read from the page, and remembered 
   await openPanel(home);
   home.find('lfx-preset-all').click();
   await acceptRiskAndExport(home);
-  assert.equal(home.find('lfx-result').hidden, false);
+  assert.equal(home.find('lfx-result-box').hidden, false);
   assert.deepEqual(accountCalls(home, 'broker'), BROKER_CALLS);
   assert.deepEqual(accountCalls(home, 'deposit'), DEPOSIT_CALLS);
   assert.deepEqual(logged(home, 'identifiers'), [{ person: 'sessionStorage', portfolio: 'remembered', overnight: 'remembered', overnightAccounts: 1, overnightRecipes: ['memory'] }]);
@@ -739,7 +737,7 @@ test('a security check on the Transactions page asks the user to open it', async
   const page = loadContentScripts(createPage({ server: { depositPage: () => ({ status: 0, ok: false, type: 'opaqueredirect' }) } }));
   await openPanel(page);
   await acceptRiskAndExport(page);
-  assert.equal(resultLines(page).length, 1, 'the broker is still saved');
+  assert.match(resultFile(page), /^📄 scalable-broker_\S+\.csv$/, 'the broker is still saved');
   assert.deepEqual(warningTexts(page), [
     'Conto deposito: Apri su Scalable la pagina «Transazioni» del conto deposito, poi esporta da lì.',
     'Dettagli tecnici: depositPage: redirect',
@@ -749,10 +747,10 @@ test('a security check on the Transactions page asks the user to open it', async
   assert.equal(page.find('lfx-progress-deposit-step').textContent, 'Non letto');
   assert.equal(page.find('lfx-progress-deposit').className, 'progress-row deposit error');
   assert.equal(page.find('lfx-progress-broker-step').textContent, '✓ 2 transazioni');
+  assert.equal(page.find('lfx-progress').hidden, false, 'the rows say which account was not read');
   const files = page.background.files();
   assert.equal(files.length, 1);
   assert.match(files[0].filename, /^scalable-broker_\S+\.csv$/, 'one account: its CSV, without a ZIP');
-  assert.equal(page.find('lfx-result-archive').hidden, true);
   assert.deepEqual(Object.keys(page.stored.lastExportDates), ['broker'], 'the overnight account is not exported yet');
 });
 
@@ -879,10 +877,25 @@ test('one account is saved as its own CSV file', async () => {
   assert.equal(saved.entries, null);
   assert.ok(saved.text.startsWith('date;time;status;reference;'));
   assert.equal(page.find('lfx-progress-label').textContent, 'Scegli dove salvare il file');
-  assert.equal(page.find('lfx-result-archive').hidden, true);
-  assert.equal(page.find('lfx-result').className, 'result');
-  assert.deepEqual(resultLines(page), [`✅ ${saved.filename} — 2 movimenti del conto deposito`]);
+  assert.equal(resultFile(page), `📄 ${saved.filename}`);
+  assert.equal(page.find('lfx-progress-broker').hidden, true, 'only the chosen account has a row');
+  assert.equal(page.find('lfx-progress-deposit-step').textContent, '✓ 2 movimenti');
   assert.deepEqual(Object.keys(page.stored.lastExportDates), ['deposit']);
+});
+
+test('an export cancelled while reading leaves no rows and no file', async () => {
+  const page = loadContentScripts(createPage());
+  await openPanel(page);
+  page.server.depositPage = () => {
+    page.find('lfx-cancel').click();
+    return { status: 200, ok: true, type: 'basic', text: async () => depositPageHtml(DEPOSIT_RECIPE) };
+  };
+  await acceptRiskAndExport(page);
+  assert.equal(page.find('lfx-status').textContent, 'Esportazione annullata.');
+  assert.equal(page.find('lfx-progress').hidden, true, 'rows stopped half way would keep moving');
+  assert.equal(resultFile(page), null);
+  assert.deepEqual(page.background.files(), []);
+  assert.equal(page.stored.lastExportDates, undefined);
 });
 
 test('closing the "Save as" window saves nothing, and the accounts do not count as exported', async () => {
@@ -891,8 +904,9 @@ test('closing the "Save as" window saves nothing, and the accounts do not count 
   page.background.dialogCancels = true;
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-status').textContent, 'Salvataggio annullato: nessun file scritto.');
-  assert.equal(page.find('lfx-result').hidden, true);
+  assert.equal(resultFile(page), null);
   assert.equal(page.find('lfx-result-show').hidden, true);
+  assert.equal(page.find('lfx-progress').hidden, false, 'the accounts were read: their rows stay');
   assert.deepEqual(page.background.files(), []);
   assert.equal(page.stored.lastExportDates, undefined);
 
@@ -914,7 +928,7 @@ test('a save failure is reported, and without the extension the page saves the f
   page.override = (message) => (message.type === 'lfx:save-as' ? { ok: false, error: 'disk full' } : undefined);
   await acceptRiskAndExport(page);
   assert.equal(page.find('lfx-status').className, 'status error');
-  assert.equal(page.find('lfx-result').hidden, true);
+  assert.equal(resultFile(page), null);
   assert.equal(page.find('lfx-status').textContent, 'Salvataggio dei file non riuscito: disk full');
   assert.equal(page.stored.lastExportDates, undefined, 'a failed save is not a done export');
 
@@ -923,7 +937,7 @@ test('a save failure is reported, and without the extension the page saves the f
     return undefined;
   };
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-result').hidden, false);
+  assert.match(resultFile(page), /^📦 scalable_\S+\.zip$/);
   assert.equal(page.find('lfx-result-folder').textContent, '📁 Cartella: Download');
   assert.equal(page.find('lfx-result-show').hidden, true, 'saved by the page: nothing to show');
   assert.equal(page.anchorDownloads.length, 1);
@@ -1057,11 +1071,11 @@ test('the update check runs when the panel opens, at most daily, and on request'
   const background = createBackground({ release: () => answer() });
   const page = loadContentScripts(createPage({ background }));
   const find = page.find;
-  assert.equal(find('lfx-update-text').textContent, 'Versione 0.1.0', 'the version is shown before any check');
+  assert.equal(find('lfx-update-text').textContent, 'Versione 1.0.0', 'the version is shown before any check');
 
   await openPanel(page);
   assert.equal(find('lfx-update').getAttribute('data-state'), 'current', 'no release published yet: nothing newer');
-  assert.equal(find('lfx-update-text').textContent, 'Versione 0.1.0 · aggiornata');
+  assert.equal(find('lfx-update-text').textContent, 'Versione 1.0.0 · aggiornata');
   assert.equal(find('lfx-update-link').hidden, true);
   assert.equal(background.releaseRequests, 1);
 
@@ -1072,13 +1086,13 @@ test('the update check runs when the panel opens, at most daily, and on request'
   assert.equal(background.releaseRequests, 1, 'a press right after a check reuses its answer');
 
   background.clock += 60 * 1000;
-  answer = () => respond({ tag_name: 'v0.2.0', html_url: 'https://github.com/Librefolio/librefolio-exporter/releases/tag/v0.2.0' });
+  answer = () => respond({ tag_name: 'v1.1.0', html_url: 'https://github.com/Librefolio/librefolio-exporter/releases/tag/v1.1.0' });
   await pressUpdateCheck(page);
   assert.equal(background.releaseRequests, 2, 'the button asks GitHub now');
   assert.equal(find('lfx-update').getAttribute('data-state'), 'available');
-  assert.equal(find('lfx-update-text').textContent, 'È disponibile la versione 0.2.0.');
+  assert.equal(find('lfx-update-text').textContent, 'È disponibile la versione 1.1.0.');
   assert.equal(find('lfx-update-link').hidden, false);
-  assert.equal(find('lfx-update-link').href, 'https://github.com/Librefolio/librefolio-exporter/releases/tag/v0.2.0');
+  assert.equal(find('lfx-update-link').href, 'https://github.com/Librefolio/librefolio-exporter/releases/tag/v1.1.0');
 
   background.clock += 60 * 1000;
   answer = () => {
@@ -1091,7 +1105,7 @@ test('the update check runs when the panel opens, at most daily, and on request'
   const offline = loadContentScripts(createPage({ background: createBackground({ release: answer }) }));
   await openPanel(offline);
   assert.equal(offline.find('lfx-update').getAttribute('data-state'), 'failed');
-  assert.equal(offline.find('lfx-update-text').textContent, 'Versione 0.1.0 · controllo non riuscito');
+  assert.equal(offline.find('lfx-update-text').textContent, 'Versione 1.0.0 · controllo non riuscito');
 
   const broken = loadContentScripts(createPage({ background: createBackground({ release: () => respond({ unexpected: true }) }) }));
   await openPanel(broken);
@@ -1130,7 +1144,7 @@ test('files keep their names when another extension renames downloads', async ()
   const page = loadContentScripts(createPage({ background }));
   await openPanel(page);
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-result').hidden, false);
+  assert.equal(page.find('lfx-result-box').hidden, false);
   const names = background.files().map((file) => file.filename);
   assert.equal(names.length, 1);
   assert.match(names[0], /^scalable_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$/);
@@ -1161,7 +1175,7 @@ test('accounts seen on the pages survive an extension reload, per person, withou
   const page = loadContentScripts(createPage({ background, links: [] }));
   await openPanel(page);
   await acceptRiskAndExport(page);
-  assert.equal(page.find('lfx-result').hidden, false, page.find('lfx-status').textContent);
+  assert.equal(page.find('lfx-result-box').hidden, false, page.find('lfx-status').textContent);
   assert.deepEqual(logged(page, 'identifiers')[0].overnight, 'remembered', 'from the broker page, after a reload');
   assert.ok(page.calls.some((call) => call.operation === 'Transactions'));
 });

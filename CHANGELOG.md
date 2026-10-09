@@ -4,9 +4,9 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - Unreleased
+## [1.0.0] - Unreleased
 
-First preview, installed by hand.
+First release, installed by hand.
 
 ### ✨ Added
 
@@ -35,9 +35,9 @@ First preview, installed by hand.
 - Accounts chosen with two tiles. The two accounts are read side by side, each with its
   row of progress and current step, while the requests still go one at a time; the
   details are in one collapsed group of the browser console.
-- At the end, a green list of the saved file, the CSV files it holds and its folder; it
-  folds to one line after a few seconds, and **Show folder** opens the folder. An account
-  counts as exported only once the file is saved.
+- At the end, each account's row keeps how many transactions were read, followed by
+  the saved file and its folder; **Show folder** opens the folder. An account counts as
+  exported only once the file is saved.
 - Period selection with the 1M, 3M, 1Y, All and "since last" buttons, the last one per
   account so that nothing is skipped; **To** defaults to today, and the form keeps its
   values across pages for the day. After the first export, only new transactions are read.

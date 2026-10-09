@@ -19,8 +19,8 @@ Chrome, Edge, Brave or another Chromium browser, version 120 or later.
 1. **Download** `librefolio-exporter-<version>.zip` from the
    [latest release](https://github.com/Librefolio/librefolio-exporter/releases/latest).
 2. **Unzip** it and put the `librefolio-exporter` folder you get where it can stay: any
-   folder works, we suggest `Downloads/chromePlugin`. After the installation Chrome will loads the extension from
-   that folder alweis, so don't move or delete it afterwards.
+   folder works, we suggest `Downloads/chromePlugin`. After the installation Chrome always
+   loads the extension from that folder, so don't move or delete it afterwards.
 3. Open `chrome://extensions` (`edge://extensions` in Edge) and turn on
    **Developer mode**, top right:
 
@@ -98,14 +98,15 @@ To install a new version later, see [Update](#-update).
 
 The two accounts are read side by side, each with its row of progress. With both
 accounts you get one ZIP holding the two CSV files: double-click it to extract them.
-With one account you get its CSV file. At the end the panel lists what was saved, folds
-the list after a few seconds and keeps **Show folder**, which opens the folder.
+With one account you get its CSV file. At the end each row says how many transactions
+were read, and below them come the saved file, its folder and **Show folder**, which
+opens the folder.
 
 <div align="center">
 <table>
   <tr>
     <td align="center"><img src="docs/images/panel-progress.png" alt="The panel while exporting" width="300"><br><sub>While exporting: one row per account</sub></td>
-    <td align="center"><img src="docs/images/panel.png" alt="The panel after an export" width="300"><br><sub>Done: the file, what it holds, its folder</sub></td>
+    <td align="center"><img src="docs/images/panel.png" alt="The panel after an export" width="300"><br><sub>Done: what was read, the file, its folder</sub></td>
   </tr>
 </table>
 </div>

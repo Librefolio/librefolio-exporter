@@ -431,11 +431,7 @@
         saved = await saveFile(output, settings);
         lastSavedId = saved.ok && typeof saved.id === 'number' ? saved.id : null;
         if (saved.ok) {
-          ui.setResult(
-            files.map((file) => ({ account: file.account, name: file.name, text: t(file.account === 'broker' ? 'resultBroker' : 'resultDeposit', file.count) })),
-            t('resultFolder', saved.folder),
-            { archive: output.archive ? output.name : '', canShow: lastSavedId !== null },
-          );
+          ui.setResult({ name: output.name, archive: output.archive, folder: t('resultFolder', saved.folder), canShow: lastSavedId !== null });
         } else if (saved.cancelled) {
           ui.setStatus(t('saveCancelled'));
         } else {

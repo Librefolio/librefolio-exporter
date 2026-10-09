@@ -43,8 +43,8 @@ test('pickLanguage uses the first supported candidate and falls back to English'
 
 test('translator fills placeholders and falls back to the key', () => {
   const t = i18n.translator('it');
-  assert.equal(t('version', '0.1.0'), 'Versione 0.1.0');
-  assert.equal(t('resultBroker', 14), '14 transazioni del conto broker');
+  assert.equal(t('version', '1.0.0'), 'Versione 1.0.0');
+  assert.equal(t('stepDoneBroker', 14), '✓ 14 transazioni');
   assert.equal(t('missingKey'), 'missingKey');
   assert.equal(i18n.translator('xx')('close'), 'Close');
 });

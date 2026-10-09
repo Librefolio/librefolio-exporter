@@ -163,29 +163,23 @@ const outcome = await waitFor(
   async () => {
     const error = await on('lfx-status', 'function () { return /error/.test(this.className) ? this.textContent : ""; }');
     if (error) return { error };
-    const items = await on('lfx-result', 'function () { return this.hidden ? null : Array.from(this.children, (item) => item.textContent); }');
-    return items ? { items } : null;
+    const file = await on('lfx-result-box', 'function () { return this.hidden ? null : this.querySelector("[data-testid=lfx-result-file]").textContent; }');
+    return file ? { file } : null;
   },
   30000,
 );
 assert.equal(outcome.error, undefined, outcome.error);
-assert.equal(outcome.items.length, 2);
-assert.match(outcome.items[0], /^✅ scalable-broker_\S+\.csv — 2 transazioni del conto broker$/);
-assert.match(outcome.items[1], /^✅ scalable-deposit_\S+\.csv — 2 movimenti del conto deposito$/);
-assert.match(await on('lfx-result-archive', 'function () { return this.textContent; }'), /^📦 scalable_\S+\.zip, con:$/);
+// At the end: the account rows with their outcome, then only the file, its folder and the button.
+assert.match(outcome.file, /^📦 scalable_\S+\.zip$/);
 assert.equal(await on('lfx-result-folder', 'function () { return this.textContent; }'), '📁 Cartella: Download');
 assert.equal(await on('lfx-result-show', visible), true, 'the button that shows the file in its folder');
 assert.equal(await on('lfx-result-show', 'function () { return this.textContent; }'), 'Mostra cartella');
+assert.equal(await on('lfx-progress', visible), true, 'the account rows stay');
+assert.equal(await on('lfx-progress-label', visible), false, 'the step label goes');
 assert.equal(await on('lfx-progress-broker-step', 'function () { return this.textContent; }'), '✓ 2 transazioni');
 assert.equal(await on('lfx-progress-deposit-step', 'function () { return this.textContent; }'), '✓ 2 movimenti');
 await shot('result');
 await shot('panel-result', await box('lfx-panel'));
-// After a few seconds the list folds to one line; the folder button stays.
-await waitFor('result folded', async () => (await on('lfx-result-details', 'function () { return this.open; }')) === false, 15000);
-assert.match(await on('lfx-result-summary', 'function () { return this.textContent; }'), /^✅ scalable_\S+\.zip salvato$/);
-assert.equal(await on('lfx-result-summary', 'function () { return getComputedStyle(this).display !== "none"; }'), true);
-assert.equal(await on('lfx-result-show', visible), true, 'the folder button stays');
-await shot('panel-folded', await box('lfx-panel'));
 
 // Only complete files: Chromium writes into .crdownload first.
 const savedFiles = () => (fs.existsSync(SAVED) ? fs.readdirSync(SAVED).filter((name) => /\.(zip|csv)$/.test(name)).sort() : []);

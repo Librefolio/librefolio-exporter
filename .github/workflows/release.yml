@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag such as v0.1.0 (equal to the manifest version) to publish
+# Push a tag such as v1.0.0 (equal to the manifest version) to publish
 # librefolio-exporter-<version>.zip and its SHA-256 as a GitHub release.
 # The extension's update check reads the latest release of this repository.
 

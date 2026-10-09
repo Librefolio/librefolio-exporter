@@ -86,7 +86,7 @@ and `lf_subtype`.
 | `lf_trading_venue` | Trade details `tradingVenue` | Where the trade was executed, e.g. `SEIX` |
 | `lf_transaction_history` | Interest details `transactionHistory` | Status changes with their times, as JSON |
 | `lf_details` | Not a field | `yes` (details read), `no` (not requested), `error` (could not be read), `n/a` (neither an executed trade nor an interest payment) |
-| `lf_exporter` | Not a field | Producer and version, e.g. `librefolio-exporter/0.1.0` |
+| `lf_exporter` | Not a field | Producer and version, e.g. `librefolio-exporter/1.0.0` |
 | `lf_format` | Not a field | Format version of this document |
 
 When `lf_details` is `no` or `error`, empty fee and tax fields mean *unknown*, not zero.
